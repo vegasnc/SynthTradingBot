@@ -1,0 +1,1 @@
+"""Synth trading engine package."""

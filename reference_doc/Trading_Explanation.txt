@@ -1,0 +1,203 @@
+================================================================================
+  EXPLANATION: WHAT THIS TRADING IS AND HOW TO START
+  (Based on the JD.md file you provided)
+================================================================================
+
+IMPORTANT NOTE
+--------------
+The file you shared (JD.md) is NOT about "Polymarket" trading.
+
+- Polymarket = a website where people bet on real-world events (e.g. elections,
+  sports). You buy/sell shares in outcomes like "Will X win?".
+
+- Your file = a DAY TRADING strategy on US STOCKS (e.g. Apple, Tesla), run
+  through Interactive Brokers and (in the document) automated with a trading bot.
+
+So below we explain the trading that IS in your file: US equities day trading
+and how to get started with it.
+
+
+================================================================================
+PART 1: WHAT IS THIS TRYING TO DO?
+================================================================================
+
+In simple words:
+- You trade US stocks during the day (day trading).
+- You use a fixed set of rules to decide WHEN to buy and WHEN to sell.
+- In the document, the goal is to build a computer program (bot) that does
+  this automatically in an Interactive Brokers account.
+
+So "this trading" = rule-based US stock day trading, with the option to
+automate it.
+
+
+================================================================================
+PART 2: HOW DOES THIS TRADING WORK? (STEP BY STEP)
+================================================================================
+
+2.1  WHICH STOCKS CAN YOU TRADE?
+--------------------------------
+Only stocks that pass these filters (the "universe"):
+
+  - US stocks only
+  - Stock price above $5.00
+  - Today’s volume (shares traded) is more than 1 million
+  - Regular trading hours only (no pre-market or after-hours for this strategy)
+
+So you are not trading every stock; only liquid, reasonably priced US names.
+
+
+2.2  HOW MUCH MONEY PER TRADE?
+------------------------------
+- Your account is split into 10% pieces.
+- Example: $100,000 account → up to 10 positions, each about $10,000.
+- So you never put more than 10% of your account into one stock.
+- In the document: no margin (cash only).
+
+
+2.3  WHEN DO YOU ENTER A TRADE? (ENTRY RULES)
+---------------------------------------------
+You buy a stock only when ALL of these are true:
+
+  1. On the PREVIOUS trading day (daily chart):
+     - RSI with 2 periods (RSI(2)) closed below 10.
+     So the stock was very oversold yesterday.
+
+  2. TODAY, on the 5-minute chart:
+     - A 5-minute candle CLOSES above yesterday’s daily high.
+     So price breaks above the prior day’s high on the 5m chart.
+
+In short: yesterday was very oversold (RSI(2) < 10), and today price breaks
+above yesterday’s high on a 5-minute close. That’s your entry signal.
+
+
+2.4  WHEN DO YOU EXIT? (EXIT RULES)
+-----------------------------------
+- You use a TRAILING STOP based on volatility (ATR).
+- ATR period: 14, on the 5-minute chart.
+- Distance: 2 × ATR (5-minute).
+- The stop is recalculated every 5 minutes when a new bar closes; you only
+  tighten the stop (never move it further away).
+- So if price goes up, your stop follows; if price drops to the stop level,
+  you are sold and the position is closed.
+
+Additional rules from the document:
+- Close ALL remaining positions by 3:45 PM ET.
+- Do not open NEW trades after 3:00 PM ET.
+- One trade per stock per day (no re-entry if stopped out).
+
+
+2.5  IF TOO MANY STOCKS QUALIFY
+-------------------------------
+If more than 10 names meet the entry rules but you only have 10 slots:
+- Rank them by BETA (how much they move vs the market).
+- Take the highest Beta first until you fill your 10 positions.
+
+
+================================================================================
+PART 3: HOW TO DO THIS TRADING (MANUAL VS AUTOMATED)
+================================================================================
+
+3.1  MANUAL TRADING
+-------------------
+You can do the same logic by hand:
+
+  1. Before the open: get a list of US stocks with price > $5 and volume
+     > 1M (from your broker or a scanner).
+  2. For each, check: did yesterday’s daily RSI(2) close below 10? Note
+     yesterday’s high.
+  3. During the day: watch 5-minute charts. When a 5m bar CLOSES above
+     yesterday’s high, that’s an entry.
+  4. Size each trade to ~10% of your account; no margin.
+  5. Put a trailing stop at 2 × 14-period ATR (5m), and update it every
+     5 minutes (tighten only).
+  6. Close everything by 3:45 PM ET; no new entries after 3:00 PM ET.
+
+You need:
+- A broker that lets you trade US stocks (e.g. Interactive Brokers).
+- Real-time or delayed data for daily + 5-minute charts.
+- A platform or spreadsheet to compute RSI(2), prior day high, and 5m ATR.
+
+
+3.2  AUTOMATED TRADING (WHAT THE DOCUMENT DESCRIBES)
+----------------------------------------------------
+The JD.md file describes building a BOT that:
+
+  - Scans for stocks that pass the filters (price, volume).
+  - Computes yesterday’s RSI(2) and prior day high.
+  - Watches 5-minute bars and enters when 5m close > prior day high.
+  - Sizes positions at 10% of account, ranks by Beta if oversubscribed.
+  - Places and manages 2×ATR(14) trailing stops (recalculated every 5m,
+    tighten only).
+  - Flattens all positions by 3:45 PM ET and stops new entries at 3:00 PM ET.
+  - Runs on a server (VPS) with a small dashboard to monitor positions and
+    orders.
+
+So "how to do this trading" in the document = run this logic automatically
+via a Python-based system connected to Interactive Brokers (and optionally
+QuantConnect or similar).
+
+
+================================================================================
+PART 4: WHAT YOU SHOULD DO TO START THIS TRADING
+================================================================================
+
+4.1  IF YOU WANT TO TRADE THIS STRATEGY MANUALLY
+-----------------------------------------------
+  1. Open a brokerage account that supports US equities (e.g. Interactive
+     Brokers).
+  2. Ensure you have market data for US stocks (daily + intraday 5-minute).
+  3. Learn how to compute RSI(2) on the daily chart and how to read
+     "prior day high."
+  4. Use a charting platform (e.g. TradingView, or your broker’s) that
+     supports 5-minute charts and ATR(14).
+  5. Start with a watchlist of liquid US stocks (price > $5, volume > 1M).
+  6. Paper trade first: write down signals and track how the strategy would
+     have performed without risking real money.
+  7. When comfortable, trade with small size (e.g. one 10% position) and
+     strictly follow the entry/exit and time rules above.
+
+
+4.2  IF YOU WANT TO AUTOMATE IT (AS IN THE DOCUMENT)
+----------------------------------------------------
+  1. Have (or open) an Interactive Brokers account (paper account first).
+  2. Get IBKR market data subscriptions needed for US stocks.
+  3. Decide who builds the bot: you (Python + IBKR API) or a contractor (as
+     in the chat in JD.md).
+  4. If using a contractor: use the JD.md content as the specification;
+     the proposal in the file (scanner, execution, trailing stops, dashboard,
+     VPS, paper then live) is the roadmap.
+  5. Run in PAPER TRADING first until results and behavior match the rules.
+  6. Then deploy to a VPS, connect to live IBKR (with real money only when
+     you are satisfied), and use the dashboard to monitor and control the bot.
+
+
+4.3  THINGS TO DECIDE BEFORE GOING LIVE
+---------------------------------------
+- Daily max loss “kill switch” (optional but recommended).
+- Exact ATR period and multiplier if you want to test variations.
+- Whether you allow re-entry in the same stock after a stop-out (in the
+  document: no re-entry).
+
+
+================================================================================
+SUMMARY
+================================================================================
+
+- Your file is about US EQUITIES DAY TRADING with a specific rule set (RSI(2)
+  < 10 on prior day, 5m close above prior day high, 2×ATR trailing stop),
+  not about Polymarket.
+
+- To "do this trading": either do the same rules manually with charts and
+  a broker, or build (or hire someone to build) an automated bot that
+  implements these rules in Interactive Brokers.
+
+- To start: open a broker account, get data, paper trade the rules first,
+  then trade small size manually or run the bot in paper then live.
+
+If you want a separate explanation of what Polymarket is and how prediction
+market trading works there, that can be written in another document.
+
+================================================================================
+End of document.
+================================================================================

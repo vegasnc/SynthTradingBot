@@ -1,0 +1,243 @@
+{
+  "source": "https://api.synthdata.co/swagger.yaml",
+  "baseUrl": "https://api.synthdata.co",
+  "apiInfo": {
+    "title": "Synth",
+    "version": "1.0",
+    "description": "Synth API offers programmatic access to probabilistic price forecasts for Equities, Commodities and Cryptocurrencies."
+  },
+  "endpoints": [
+    {
+      "path": "/insights/liquidation",
+      "method": "GET",
+      "summary": "Insight - Liquidation probability",
+      "description": "Get long and short liquidation probability estimates for an asset at various price levels. Returns the probability of liquidation within 6, 12, 18, and 24 hour windows for both long and short positions. Useful for assessing leverage risk, setting stop-loss levels, and managing margin exposure. Supported assets: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/lp-bounds",
+      "method": "GET",
+      "summary": "Insight - Liquidity provider bounds",
+      "description": "Get price interval analysis for an asset over the next 24 hours. Returns price intervals with the probability of price staying within each interval, expected time in-range, and estimated impermanent loss. Useful for concentrated liquidity positioning, options strike selection, and range-bound trading strategies. Supported assets: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/lp-probabilities",
+      "method": "GET",
+      "summary": "Insight - Liquidity provider probabilities",
+      "description": "Get the probability of an asset's price being above or below specific price targets over the next 24 hours. Returns probabilities for 11 upside and 11 downside price levels relative to the current price. Useful for options strike selection, Polymarket up/down contracts, and directional risk assessment. Supported assets: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/option-pricing",
+      "method": "GET",
+      "summary": "Insight - Option pricing",
+      "description": "Get SynthData-derived option prices for an asset. Returns theoretical call and put prices across a range of strike prices with expiry time, using SynthData's ensemble volatility forecasts. Compare against market-quoted premiums to identify mispriced options. Supported assets: BTC, ETH, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/polymarket/range",
+      "method": "GET",
+      "summary": "Insight - Polymarket price range",
+      "description": "Get SynthData's estimated fair probabilities alongside live Polymarket odds for daily price range contracts. Returns both synth and Polymarket probabilities per range, current outcome, and order book data. Compare to identify mispriced range bets. Supported assets: BTC, ETH, SOL, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, SOL, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/polymarket/up-down/daily",
+      "method": "GET",
+      "summary": "Insight - Polymarket up/down daily",
+      "description": "Get SynthData's estimated fair probabilities alongside live Polymarket odds for daily Up/Down contracts. Returns both synth and Polymarket probabilities, current outcome, and order book data (best bid/ask). Compare to identify mispriced bets. Supported assets: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/polymarket/up-down/hourly",
+      "method": "GET",
+      "summary": "Insight - Polymarket up/down hourly",
+      "description": "Get SynthData's estimated fair probabilities alongside live Polymarket odds for hourly Up/Down contracts. Returns both synth and Polymarket probabilities, current outcome, and order book data (best bid/ask). Compare to identify mispriced bets on shorter timeframes. Supported assets: BTC, ETH, SOL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, SOL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 1h)", "example": "1h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/volatility",
+      "method": "GET",
+      "summary": "Insight - Volatility",
+      "description": "It selects the top 'limit' miners from the meta-leaderboard to calculate the volatility.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/insights/prediction-percentiles",
+      "method": "GET",
+      "summary": "Prediction Percentiles - meta model from top 10 miners",
+      "description": "Get price distribution percentiles for an asset over the 24-hour forecast horizon. Returns predicted prices at 9 percentile levels (0.5th, 5th, 20th, 35th, 50th, 65th, 80th, 95th, 99.5th), giving the full probability distribution of expected price movements. Useful for position sizing, setting price targets, and understanding tail risk. Supported assets: BTC, ETH, XAU, SOL, SPY, NVDA, GOOGL, TSLA, AAPL.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "Symbol of the asset: BTC, ETH, XAU, SOL, JITOSOL, SPY, NVDA, GOOGL, TSLA, AAPL", "example": "BTC"},
+        {"name": "horizon", "in": "query", "type": "string", "required": false, "description": "Forecast horizon: 1h for next-hour or 24h for next-day price intervals (default: 24h)", "example": "24h"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14). See 'Leaderboard - Latest Meta-Leaderboard'.", "example": 14},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/v2/leaderboard/historical",
+      "method": "GET",
+      "summary": "Leaderboard - Leaderboard History V2",
+      "description": "Gets the leaderboard history.",
+      "parameters": [
+        {"name": "start_time", "in": "query", "type": "string", "required": true, "description": "an URL encoded ISO 8601 date/time to start from (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "end_time", "in": "query", "type": "string", "required": true, "description": "an URL encoded ISO 8601 date/time to end at (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "prompt_name", "in": "query", "type": "string", "required": false, "description": "Prompt name, high for 1h prompt or low for 24h prompt", "example": "low"}
+      ]
+    },
+    {
+      "path": "/v2/leaderboard/latest",
+      "method": "GET",
+      "summary": "Leaderboard - Latest Leaderboard V2",
+      "description": "Gets the current leaderboard.",
+      "parameters": [
+        {"name": "prompt_name", "in": "query", "type": "string", "required": false, "description": "Prompt name, high for 1h prompt or low for 24h prompt", "example": "low"}
+      ]
+    },
+    {
+      "path": "/v2/meta-leaderboard/historical",
+      "method": "GET",
+      "summary": "Leaderboard - Meta-Leaderboard History V2",
+      "description": "Gets the meta-leaderboard history, which aggregates miners' incentives over a period of days in the past.",
+      "parameters": [
+        {"name": "start_time", "in": "query", "type": "string", "required": true, "description": "an URL encoded ISO 8601 date/time to start from (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "prompt_name", "in": "query", "type": "string", "required": false, "description": "Prompt name, high for 1h prompt or low for 24h prompt", "example": "low"},
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14)", "example": 14}
+      ]
+    },
+    {
+      "path": "/v2/meta-leaderboard/latest",
+      "method": "GET",
+      "summary": "Leaderboard - Latest Meta-Leaderboard V2",
+      "description": "Get the current meta-leaderboard, which aggregates miners' incentives over a period of days. This provides another way to rank prediction accuracy, thereby increasing stability.",
+      "parameters": [
+        {"name": "days", "in": "query", "type": "integer", "required": false, "description": "Number of days to aggregate for the meta-leaderboard (default is 14)", "example": 14},
+        {"name": "prompt_name", "in": "query", "type": "string", "required": false, "description": "Prompt name, high for 1h prompt or low for 24h prompt", "example": "low"}
+      ]
+    },
+    {
+      "path": "/v2/prediction/best",
+      "method": "GET",
+      "summary": "Predictions - Best Prediction Rates",
+      "description": "Gets the latest prediction rates of the current best miner.",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": true, "description": "the symbol of the asset: BTC, ETH, XAU, SOL, SPYX, NVDAX, TSLAX, AAPLX, GOOGLX", "example": "BTC"},
+        {"name": "time_increment", "in": "query", "type": "integer", "required": true, "description": "the time interval (in seconds) of the validator prompt between each rate. 300 or 60.", "example": 300},
+        {"name": "time_length", "in": "query", "type": "integer", "required": true, "description": "the length of time (in seconds) of the validator prompt from the start time. 86400 or 3600.", "example": 86400},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/v2/prediction/historical",
+      "method": "GET",
+      "summary": "Predictions - Historical Prediction Rates",
+      "description": "Gets the historical prediction rates.",
+      "parameters": [
+        {"name": "miner", "in": "query", "type": "array", "required": true, "description": "a list of specific miners by their ID", "collectionFormat": "csv", "items": {"type": "integer"}},
+        {"name": "asset", "in": "query", "type": "string", "required": true, "description": "the symbol of the asset: BTC, ETH, XAU, SOL, SPYX, NVDAX, TSLAX, AAPLX, GOOGLX", "example": "BTC"},
+        {"name": "start_time", "in": "query", "type": "string", "required": true, "description": "an ISO 8601 date/time to start the historical rates from (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "time_increment", "in": "query", "type": "integer", "required": true, "description": "the time interval (in seconds) of the validator prompt between each rate. 300 or 60.", "example": 300},
+        {"name": "time_length", "in": "query", "type": "integer", "required": true, "description": "the length of time (in seconds) of the validator prompt from the start time. 86400 or 3600.", "example": 86400},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/v2/prediction/latest",
+      "method": "GET",
+      "summary": "Predictions - Latest Prediction Rates",
+      "description": "Gets the latest valid prediction rates.",
+      "parameters": [
+        {"name": "miner", "in": "query", "type": "array", "required": true, "description": "a list of specific miners by their ID", "collectionFormat": "csv", "items": {"type": "integer"}},
+        {"name": "asset", "in": "query", "type": "string", "required": true, "description": "the symbol of the asset: BTC, ETH, XAU, SOL, SPYX, NVDAX, TSLAX, AAPLX, GOOGLX", "example": "BTC"},
+        {"name": "time_increment", "in": "query", "type": "integer", "required": true, "description": "the time interval (in seconds) of the validator prompt between each rate. 300 or 60.", "example": 300},
+        {"name": "time_length", "in": "query", "type": "integer", "required": true, "description": "the length of time (in seconds) of the validator prompt from the start time. 86400 or 3600.", "example": 86400},
+        {"name": "limit", "in": "query", "type": "integer", "required": false, "description": "Number of miners from the meta-leaderboard to use for the analysis (default is 10)", "example": 10},
+        {"name": "Authorization", "in": "header", "type": "string", "required": true, "description": "API key", "example": "Apikey MY_API_KEY"}
+      ]
+    },
+    {
+      "path": "/validation/miner",
+      "method": "GET",
+      "summary": "Validations - Miner Validation",
+      "description": "Gets the validation status for a specific miner",
+      "parameters": [
+        {"name": "uid", "in": "query", "type": "integer", "required": true, "description": "ID of the miner to get validation for"}
+      ]
+    },
+    {
+      "path": "/validation/scores/historical",
+      "method": "GET",
+      "summary": "Validations - Historical Scores",
+      "description": "Gets the validation scores for all miners between two dates",
+      "parameters": [
+        {"name": "from", "in": "query", "type": "string", "required": true, "description": "Start date (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "to", "in": "query", "type": "string", "required": true, "description": "End date (2025-02-03T10:19:04Z or 2025-02-03T17:19:04+07:00 or 2025-02-03)", "example": "2025-02-03T10:19:04Z"},
+        {"name": "miner_uid", "in": "query", "type": "integer", "required": false, "description": "Optional miner ID to filter by"},
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "The symbol of the asset: BTC, ETH, XAU, SOL, SPYX, NVDAX, TSLAX, AAPLX, GOOGLX (default BTC)", "example": "BTC"},
+        {"name": "time_increment", "in": "query", "type": "integer", "required": false, "description": "the time interval (in seconds) of the validator prompt between each rate: 300 or 60 (default 300).", "example": 300},
+        {"name": "time_length", "in": "query", "type": "integer", "required": false, "description": "the length of time (in seconds) of the validator prompt from the start time: 86400 or 3600 (default 86400)", "example": 86400}
+      ]
+    },
+    {
+      "path": "/validation/scores/latest",
+      "method": "GET",
+      "summary": "Validations - Latest Scores",
+      "description": "Gets the most recent validation scores for all miners",
+      "parameters": [
+        {"name": "asset", "in": "query", "type": "string", "required": false, "description": "The symbol of the asset: BTC, ETH, XAU, SOL, SPYX, NVDAX, TSLAX, AAPLX, GOOGLX (default BTC)", "example": "BTC"},
+        {"name": "time_increment", "in": "query", "type": "integer", "required": false, "description": "the time interval (in seconds) of the validator prompt between each rate: 300 or 60 (default 300).", "example": 300},
+        {"name": "time_length", "in": "query", "type": "integer", "required": false, "description": "the length of time (in seconds) of the validator prompt from the start time: 86400 or 3600 (default 86400)", "example": 86400}
+      ]
+    }
+  ]
+}
