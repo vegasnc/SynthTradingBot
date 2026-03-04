@@ -23,6 +23,8 @@ class EngineState:
     latest_prediction: dict[str, dict[str, Any]] = field(default_factory=dict)
     latest_price: dict[str, float] = field(default_factory=dict)
     latest_market_data: dict[str, dict[str, Any]] = field(default_factory=dict)
+    last_market_data_error: str | None = None
+    last_market_data_success_at: datetime | None = None
     exposure_by_symbol: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     last_updates: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200))
     synth_api_calls: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=100))

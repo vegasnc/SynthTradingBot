@@ -9,6 +9,35 @@ Bias = Literal["long", "short", "flat"]
 MarketType = Literal["crypto", "equity"]
 
 
+def market_direction_from_momentum(
+    spot: float,
+    candles_5m: list[dict],
+    lookback_minutes: int = 120,
+) -> Literal["bullish", "bearish", "neutral"]:
+    """
+    Derive market direction from realized momentum over a lookback period.
+    Bullish = price went up over the interval. Bearish = price went down.
+    Uses 5m candles: lookback_minutes/5 candles ago.
+    """
+    if not candles_5m or lookback_minutes <= 0:
+        return "neutral"
+    bars_needed = max(1, lookback_minutes // 5)
+    if len(candles_5m) < bars_needed:
+        return "neutral"
+    price_ago = float(candles_5m[-bars_needed].get("close") or candles_5m[-bars_needed].get("open", spot))
+    if price_ago <= 0:
+        return "neutral"
+    pct_change = (spot - price_ago) / price_ago
+    if pct_change > 0.001:
+        return "bullish"
+    if pct_change < -0.001:
+        return "bearish"
+    return "neutral"
+
+# Counter-trend trades need this much higher edge than direction-aligned to override market strength
+COUNTER_TREND_EDGE_MULTIPLIER = 1.5
+
+
 @dataclass(slots=True)
 class Decision:
     bias: Bias
@@ -25,53 +54,44 @@ class Decision:
     flags: dict[str, bool]
 
 
-def build_decision(spot: float, pct: Percentiles, market_type: MarketType, in_cooldown: bool) -> Decision:
+def _build_decision_for_bias(
+    spot: float, pct: Percentiles, market_type: MarketType, bias: Literal["long", "short"]
+) -> Decision:
+    """Build a Decision for a specific direction (long or short)."""
     range_ = pct.p95 - pct.p05
     central_range = pct.p80 - pct.p20
-    edge = (pct.p50 - spot) / spot
     uncertainty = range_ / spot
+    unc_threshold = 0.08 if market_type == "crypto" else 0.05
     reasons: list[str] = []
-    flags = {
-        "edge_filter_pass": abs(edge) >= 0.10 * uncertainty,
-        "uncertainty_filter_pass": uncertainty <= (0.08 if market_type == "crypto" else 0.05),
-        "cooldown_pass": not in_cooldown,
-    }
-    allowed = all(flags.values())
-    if not flags["edge_filter_pass"]:
-        reasons.append("edge_below_threshold")
+    flags = {"uncertainty_filter_pass": uncertainty <= unc_threshold}
     if not flags["uncertainty_filter_pass"]:
         reasons.append("uncertainty_too_high")
-    if not flags["cooldown_pass"]:
-        reasons.append("symbol_on_cooldown")
 
-    if pct.p50 > spot:
-        bias: Bias = "long"
+    if bias == "long":
+        edge = (pct.p50 - spot) / spot
         entry = max(pct.p35, spot - 0.20 * central_range)
         stop_base = (pct.p05 + pct.p20) / 2
         stop = stop_base - (0.08 * central_range)
         tp1 = (pct.p50 + pct.p65) / 2
         tp2 = pct.p65
-    elif pct.p50 < spot:
-        bias = "short"
+    else:
+        edge = (spot - pct.p50) / spot
         entry = min(pct.p65, spot + 0.20 * central_range)
         stop_base = (pct.p80 + pct.p95) / 2
         stop = stop_base + (0.08 * central_range)
         tp1 = (pct.p35 + pct.p50) / 2
         tp2 = pct.p35
-    else:
-        bias = "flat"
-        entry = spot
-        stop = spot
-        tp1 = spot
-        tp2 = spot
-        reasons.append("no_direction")
-        allowed = False
+
+    flags["edge_filter_pass"] = abs(edge) >= 0.10 * uncertainty
+    if not flags["edge_filter_pass"]:
+        reasons.append("edge_below_threshold")
+    allowed = all(flags.values())
     return Decision(
         bias=bias,
         edge=edge,
         uncertainty=uncertainty,
-        allowed_to_trade=allowed and bias != "flat",
-        reasons=reasons,
+        allowed_to_trade=allowed,
+        reasons=reasons.copy(),
         entry=entry,
         stop=stop,
         tp1=tp1,
@@ -80,6 +100,66 @@ def build_decision(spot: float, pct: Percentiles, market_type: MarketType, in_co
         range_=range_,
         flags=flags,
     )
+
+
+def build_decision_with_market_strength(
+    spot: float,
+    pct: Percentiles,
+    market_type: MarketType,
+    counter_trend_multiplier: float = COUNTER_TREND_EDGE_MULTIPLIER,
+    market_direction_override: Literal["bullish", "bearish", "neutral"] | None = None,
+) -> Decision:
+    """
+    Build decision applying market-strength bias: prefer trades aligned with market direction.
+    Uses market_direction_override (from realized momentum over lookback) when provided.
+    Otherwise falls back to p50 vs spot (forward forecast).
+    """
+    if pct.p50 == spot:
+        flat_d = _build_decision_for_bias(spot, pct, market_type, "long")
+        flat_d.bias = "flat"  # type: ignore[misc]
+        flat_d.allowed_to_trade = False
+        flat_d.reasons.append("no_direction")
+        flat_d.flags["market_direction"] = market_direction_override or "neutral"
+        flat_d.flags["direction_aligned"] = True
+        return flat_d
+    if market_direction_override and market_direction_override != "neutral":
+        market_bullish = market_direction_override == "bullish"
+    else:
+        market_bullish = pct.p50 > spot
+    long_d = _build_decision_for_bias(spot, pct, market_type, "long")
+    short_d = _build_decision_for_bias(spot, pct, market_type, "short")
+    long_edge_abs = abs(long_d.edge)
+    short_edge_abs = abs(short_d.edge)
+
+    if market_bullish:
+        aligned_d, counter_d = long_d, short_d
+        aligned_edge, counter_edge = long_edge_abs, short_edge_abs
+    else:
+        aligned_d, counter_d = short_d, long_d
+        aligned_edge, counter_edge = short_edge_abs, long_edge_abs
+
+    # Prefer direction-aligned; allow counter-trend only if edge is much better
+    if aligned_d.allowed_to_trade and not counter_d.allowed_to_trade:
+        chosen = aligned_d
+    elif counter_d.allowed_to_trade and not aligned_d.allowed_to_trade:
+        chosen = counter_d
+        chosen.reasons.append("counter_trend_override")
+    elif aligned_d.allowed_to_trade and counter_d.allowed_to_trade:
+        if counter_edge >= aligned_edge * counter_trend_multiplier:
+            chosen = counter_d
+            chosen.reasons.append("counter_trend_override")
+        else:
+            chosen = aligned_d
+    else:
+        chosen = aligned_d
+    chosen.flags["market_direction"] = market_direction_override or ("bullish" if market_bullish else "bearish")
+    chosen.flags["direction_aligned"] = chosen.bias == aligned_d.bias
+    return chosen
+
+
+def build_decision(spot: float, pct: Percentiles, market_type: MarketType) -> Decision:
+    """Legacy: single-direction decision. Prefer build_decision_with_market_strength."""
+    return build_decision_with_market_strength(spot, pct, market_type)
 
 
 def confirm_entry(

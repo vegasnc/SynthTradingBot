@@ -13,7 +13,13 @@ from .broker import BrokerInterface
 from .config import SymbolConfig
 from .db import MongoStore
 from .state import EngineState
-from .strategy import build_decision, compute_position_size, confirm_entry, tighten_stop
+from .strategy import (
+    build_decision_with_market_strength,
+    compute_position_size,
+    confirm_entry,
+    market_direction_from_momentum,
+    tighten_stop,
+)
 from .synth_client import SynthClient
 from .utils import as_utc, floor_to_minute, is_equity_tradable_now, utc_now
 
@@ -37,6 +43,8 @@ class EngineScheduler:
         synth_refresh_minutes: int = 10,
         synth_price_change_refresh_pct: float = 1.0,
         synth_price_change_period_minutes: int = 2,
+        market_strength_counter_trend_multiplier: float = 1.5,
+        market_strength_lookback_minutes: int = 120,
     ) -> None:
         self.store = store
         self.synth = synth
@@ -46,17 +54,67 @@ class EngineScheduler:
         self.synth_refresh_minutes = synth_refresh_minutes
         self.synth_price_change_refresh_pct = synth_price_change_refresh_pct
         self.synth_price_change_period_minutes = synth_price_change_period_minutes
+        self.market_strength_counter_trend_multiplier = market_strength_counter_trend_multiplier
+        self.market_strength_lookback_minutes = market_strength_lookback_minutes
         self._running = False
 
     async def run_forever(self) -> None:
         self._running = True
-        while self._running:
+        monitor_task = asyncio.create_task(self._position_monitor_loop())
+        try:
+            while self._running:
+                try:
+                    await self.tick()
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("scheduler tick failed: %s", exc)
+                    await self.store.insert_event("error", "scheduler_tick", str(exc))
+                await asyncio.sleep(self.loop_seconds)
+        finally:
+            monitor_task.cancel()
             try:
-                await self.tick()
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _position_monitor_loop(self) -> None:
+        """Check open positions for stop/TP hits every 1s for fast crypto exits."""
+        while self._running:
+            await asyncio.sleep(1)
+            try:
+                await self._check_positions_now()
             except Exception as exc:  # noqa: BLE001
-                logger.exception("scheduler tick failed: %s", exc)
-                await self.store.insert_event("error", "scheduler_tick", str(exc))
-            await asyncio.sleep(self.loop_seconds)
+                logger.exception("position monitor failed: %s", exc)
+
+    async def _check_positions_now(self) -> None:
+        """Immediate check of all open positions for stop/TP - uses latest market data."""
+        cursor = self.store.db.positions.find({"status": "open"})
+        open_positions = await cursor.to_list(length=200)
+        symbols_to_check = list({p["symbol"] for p in open_positions})
+        for symbol in symbols_to_check:
+            mkt = self.state.latest_market_data.get(symbol)
+            if not mkt:
+                continue
+            candles_1m = mkt.get("candles_1m") or []
+            if not candles_1m:
+                continue
+            spot = float(mkt.get("spot") or candles_1m[-1].get("close", 0))
+            last_candle = candles_1m[-1]
+            cfg = next((c for c in self.state.symbols if c.symbol == symbol), None)
+            if not cfg:
+                continue
+            signal = self.state.latest_signal.get(symbol)
+            if not signal:
+                pos_with_meta = next(
+                    (p for p in open_positions if p["symbol"] == symbol and p.get("metadata", {}).get("signal")),
+                    None,
+                )
+                signal = pos_with_meta.get("metadata", {}).get("signal") if pos_with_meta else None
+            if not signal:
+                latest = await self.store.db.signals.find_one({"symbol": symbol}, sort=[("timestamp", -1)])
+                if latest:
+                    signal = latest
+                    self.state.latest_signal[symbol] = latest
+            await self._manage_position(cfg, signal, spot, last_candle)
 
     async def tick(self) -> None:
         for cfg in self.state.symbols:
@@ -89,12 +147,15 @@ class EngineScheduler:
         if not pred:
             return
         pct = pred["percentiles"]
-        in_cooldown = await self._in_cooldown(symbol, now)
-        decision = build_decision(
+        market_dir = market_direction_from_momentum(
+            spot, candles_5m, self.market_strength_lookback_minutes
+        )
+        decision = build_decision_with_market_strength(
             spot=spot,
             pct=self.synth.parse_percentiles({"percentiles": pct}),
             market_type=cfg.market_type,
-            in_cooldown=in_cooldown,
+            counter_trend_multiplier=self.market_strength_counter_trend_multiplier,
+            market_direction_override=market_dir,
         )
         entry_ok = confirm_entry(decision.bias, decision.entry, candles_1m[-3:], candles_5m[-2:])
         decision.allowed_to_trade = decision.allowed_to_trade and entry_ok and self.state.trading_enabled
@@ -134,7 +195,7 @@ class EngineScheduler:
         last_candle = candles_1m[-1] if candles_1m else {}
         await self._manage_position(cfg, signal_doc, spot, last_candle)
         if decision.allowed_to_trade:
-            await self._try_open_position(cfg, signal_doc)
+            await self._try_open_position(cfg, signal_doc, spot)
 
     async def _persist_candles(self, symbol: str, candles_1m: list, candles_5m: list) -> None:
         """Persist frontend-provided candles to Mongo for /candles endpoint."""
@@ -178,7 +239,8 @@ class EngineScheduler:
         pct = self.synth.parse_percentiles(payload)
         range_ = pct.p95 - pct.p05
         uncertainty = range_ / spot
-        next_refresh_at = now + timedelta(minutes=self.synth_refresh_minutes)
+        adaptive_mins = SynthClient.adaptive_refresh_minutes(uncertainty, cfg.market_type)
+        next_refresh_at = now + timedelta(minutes=adaptive_mins)
         doc = {
             "symbol": symbol,
             "market_type": cfg.market_type,
@@ -205,17 +267,33 @@ class EngineScheduler:
         cursor = self.store.db.positions.find({"symbol": symbol, "status": "open"}).sort("opened_at", -1)
         return await cursor.to_list(length=50)
 
-    async def _try_open_position(self, cfg: SymbolConfig, signal: dict[str, Any]) -> None:
+    async def _try_open_position(self, cfg: SymbolConfig, signal: dict[str, Any], spot: float) -> None:
         symbol = cfg.symbol
         new_side = signal["bias"]
+        entry_price = signal["levels"]["entry"]
         open_positions = await self._open_positions_for_symbol(symbol)
-        for pos in open_positions:
-            if pos.get("side") == new_side:
-                return
+        same_side = [p for p in open_positions if p.get("side") == new_side]
+        if same_side:
+            existing_entries = [float(p["entry_price"]) for p in same_side]
+            if new_side == "long":
+                best_existing = min(existing_entries)
+                if entry_price >= best_existing:
+                    logger.info("skip open %s long: new entry %.2f not better than existing (min=%.2f)", symbol, entry_price, best_existing)
+                    return
+                if spot > best_existing:
+                    logger.info("skip open %s long: spot %.2f above existing entry %.2f (would chase)", symbol, spot, best_existing)
+                    return
+            else:
+                best_existing = max(existing_entries)
+                if entry_price <= best_existing:
+                    logger.info("skip open %s short: new entry %.2f not better than existing (max=%.2f)", symbol, entry_price, best_existing)
+                    return
+                if spot < best_existing:
+                    logger.info("skip open %s short: spot %.2f below existing entry %.2f (would chase)", symbol, spot, best_existing)
+                    return
         side = "buy" if new_side == "long" else "sell"
         levels = signal["levels"]
         risk_pct = self.state.crypto_risk_pct if cfg.market_type == "crypto" else self.state.equity_risk_pct
-        entry_price = levels["entry"]
         stop_price = levels["stop"]
         # Optional liquidation-aware adjustment for crypto: move stop 0.3% outside nearest high-probability band and reduce size.
         size_scale = 1.0
@@ -286,7 +364,7 @@ class EngineScheduler:
         self.state.push_update("position_opened", pos)
 
     async def _manage_position(
-        self, cfg: SymbolConfig, signal: dict[str, Any], spot: float, last_candle: dict
+        self, cfg: SymbolConfig, signal: dict[str, Any] | None, spot: float, last_candle: dict
     ) -> None:
         candle_low = float(last_candle.get("low") or last_candle.get("close") or spot)
         candle_high = float(last_candle.get("high") or last_candle.get("close") or spot)
@@ -307,12 +385,12 @@ class EngineScheduler:
             if hit_tp1 and not pos["tp1_done"]:
                 close_qty = qty * 0.4
                 pnl = ((spot - pos["entry_price"]) if side == "long" else (pos["entry_price"] - spot)) * close_qty
+                set_fields: dict[str, Any] = {"tp1_done": True}
+                if signal and signal.get("levels"):
+                    set_fields["stop_price"] = signal["levels"].get("p35" if side == "long" else "p65", stop)
                 await self.store.db.positions.update_one(
                     {"_id": pos["_id"]},
-                    {
-                        "$set": {"tp1_done": True, "stop_price": signal["levels"]["p35"] if side == "long" else signal["levels"]["p65"]},
-                        "$inc": {"realized_pnl": pnl, "qty": -close_qty},
-                    },
+                    {"$set": set_fields, "$inc": {"realized_pnl": pnl, "qty": -close_qty}},
                 )
             if hit_tp2 and not pos["tp2_done"]:
                 close_qty = qty * 0.4
@@ -322,8 +400,10 @@ class EngineScheduler:
                     {"$set": {"tp2_done": True}, "$inc": {"realized_pnl": pnl, "qty": -close_qty}},
                 )
 
-            if hit_tp1:
-                new_stop = tighten_stop(stop, side, self.synth.parse_percentiles({"percentiles": signal["levels"]}), tp1_hit=True)
+            if hit_tp1 and signal and signal.get("levels"):
+                new_stop = tighten_stop(
+                    stop, side, self.synth.parse_percentiles({"percentiles": signal["levels"]}), tp1_hit=True
+                )
                 if side == "long":
                     new_stop = max(stop, new_stop)
                 else:
@@ -336,25 +416,15 @@ class EngineScheduler:
             if hit_stop or pos_cur["qty"] <= (pos_cur["runner_qty"] + 1e-9):
                 close_qty = pos_cur["qty"]
                 pnl = ((spot - pos_cur["entry_price"]) if side == "long" else (pos_cur["entry_price"] - spot)) * close_qty
-                cooldown = utc_now() + timedelta(minutes=30) if hit_stop else None
                 await self.store.db.positions.update_one(
                     {"_id": pos_cur["_id"]},
                     {
-                        "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": cooldown},
+                        "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": None},
                         "$inc": {"realized_pnl": pnl},
                     },
                 )
                 logger.info("closed %s %s: hit_stop=%s spot=%.2f stop=%.2f", cfg.symbol, side, hit_stop, spot, stop)
                 self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": hit_stop, "pnl": pnl})
-
-    async def _in_cooldown(self, symbol: str, now) -> bool:
-        last_closed = await self.store.db.positions.find_one(
-            {"symbol": symbol, "status": "closed", "cooldown_until": {"$ne": None}},
-            sort=[("closed_at", -1)],
-        )
-        if not last_closed:
-            return False
-        return as_utc(last_closed["cooldown_until"]) > now
 
     async def _within_portfolio_exposure(self, symbol: str, entry_price: float, qty: float) -> bool:
         notional = entry_price * qty

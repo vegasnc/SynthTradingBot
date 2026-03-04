@@ -11,14 +11,14 @@ def test_percentile_parsing():
 
 def test_trade_filter_rules():
     p = SynthClient.parse_percentiles({"percentiles": {"p05": 98, "p20": 99, "p35": 100, "p50": 101, "p65": 102, "p80": 103, "p95": 104}})
-    d = build_decision(spot=100, pct=p, market_type="equity", in_cooldown=False)
+    d = build_decision(spot=100, pct=p, market_type="equity")
     assert isinstance(d.allowed_to_trade, bool)
     assert "edge_filter_pass" in d.flags
 
 
 def test_entry_stop_tp_math_long():
     p = SynthClient.parse_percentiles({"percentiles": {"p05": 90, "p20": 93, "p35": 95, "p50": 105, "p65": 110, "p80": 115, "p95": 120}})
-    d = build_decision(spot=100, pct=p, market_type="crypto", in_cooldown=False)
+    d = build_decision(spot=100, pct=p, market_type="crypto")
     assert d.bias == "long"
     assert d.stop < d.entry < d.tp1 < d.tp2
 

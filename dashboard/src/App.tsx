@@ -30,16 +30,33 @@ function formatEST(ts: string): string {
   }
 }
 
+function formatPrice(n: number | undefined): string {
+  if (n == null || Number.isNaN(n)) return "--";
+  return n >= 1 ? n.toFixed(2) : n.toFixed(6);
+}
+
+function defaultUncThreshold(marketType: string): string {
+  return marketType === "equity" ? "≤0.05" : "≤0.08";
+}
+
 type Page = "overview" | "trades" | "settings";
 
-const ONE_HOUR_MS = 60 * 60 * 1000;
-function signalsWithinLastHour(signals: Signal[]): Signal[] {
-  const cutoff = Date.now() - ONE_HOUR_MS;
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+function signalsWithinWindow(signals: Signal[], windowMs = SIX_HOURS_MS): Signal[] {
+  const cutoff = Date.now() - windowMs;
   return signals.filter((s) => {
     try {
-      const s2 = String(s.timestamp).trim();
-      const asUTC = s2.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s2) ? s2 : s2.replace(/\.\d+$/, "") + "Z";
-      return new Date(asUTC).getTime() >= cutoff;
+      const raw = s.timestamp;
+      if (raw == null) return true;
+      const s2 = String(raw).trim();
+      if (!s2) return true;
+      let asUTC = s2;
+      if (!s2.endsWith("Z") && !/[+-]\d{2}:?\d{2}$/.test(s2)) {
+        asUTC = s2.replace(/\.\d{3,}$/, "").replace(/\.\d+$/, "") + "Z";
+      }
+      const ts = new Date(asUTC).getTime();
+      if (Number.isNaN(ts)) return true;
+      return ts >= cutoff;
     } catch {
       return true;
     }
@@ -56,6 +73,7 @@ export default function App() {
   const [positions, setPositions] = useState<{
     open: Position[];
     history: Position[];
+    spot_by_symbol?: Record<string, number>;
     today_pnl?: number;
     total_pnl?: number;
     win_rate?: number;
@@ -82,8 +100,8 @@ export default function App() {
       setSelected(syms[0]?.symbol ?? selected);
     }
     setState(await api.state());
-    setPositions(await api.positions());
-    setOrders(await api.orders());
+    setPositions(await api.positions(tradesPeriod));
+    setOrders(await api.orders(undefined, tradesPeriod));
     setSynthCalls(await api.synthCalls());
   }
 
@@ -131,7 +149,7 @@ export default function App() {
   }, [page, selected]);
 
   useEffect(() => {
-    if (page === "trades") {
+    if (page === "overview") {
       loadTradesData(tradesPeriod).catch(console.error);
     }
   }, [page, tradesPeriod]);
@@ -150,8 +168,8 @@ export default function App() {
         api.positions().then(setPositions).catch(console.error);
       }
       if (msg?.topic === "order_created") {
-        api.orders(undefined, page === "trades" ? tradesPeriod : undefined).then(setOrders).catch(console.error);
-        api.positions(page === "trades" ? tradesPeriod : undefined).then(setPositions).catch(console.error);
+        api.orders(undefined, tradesPeriod).then(setOrders).catch(console.error);
+        api.positions(tradesPeriod).then(setPositions).catch(console.error);
       }
       if (msg?.topic === "synth_api_call") {
         api.synthCalls().then(setSynthCalls).catch(() => {});
@@ -159,8 +177,8 @@ export default function App() {
     });
     const poll = setInterval(() => {
       api.state().then(setState).catch(console.error);
-      api.positions(page === "trades" ? tradesPeriod : undefined).then(setPositions).catch(console.error);
-      api.orders(undefined, page === "trades" ? tradesPeriod : undefined).then(setOrders).catch(console.error);
+      api.positions(tradesPeriod).then(setPositions).catch(console.error);
+      api.orders(undefined, tradesPeriod).then(setOrders).catch(console.error);
       api.signals(selected, 80).then(setSignals).catch(console.error);
       api.signals(undefined, 200).then(setOverviewSignals).catch(console.error);
       if (page === "overview") {
@@ -175,7 +193,9 @@ export default function App() {
   }, [selected, refreshMs, page, tradesPeriod]);
 
   const latestSignal = overviewSignals[0];
-  const recentSignals = signalsWithinLastHour(overviewSignals);
+  const recentSignals = signalsWithinWindow(overviewSignals);
+  const signalsToShow =
+    recentSignals.length > 0 ? recentSignals : overviewSignals.slice(0, 20);
 
   async function toggleTrading(enable: boolean) {
     await api.controls({ enable_trading: enable });
@@ -213,7 +233,6 @@ export default function App() {
 
       <nav>
         <button onClick={() => setPage("overview")}>Dashboard</button>
-        <button onClick={() => setPage("trades")}>Trades / Orders</button>
         <button onClick={() => setPage("settings")}>Settings</button>
       </nav>
 
@@ -246,6 +265,20 @@ export default function App() {
             <div>Closed positions: {positions.history.length}</div>
             <div>Last signal: {latestSignal?.bias ?? "n/a"}</div>
             <div>Win-rate: {computeWinRate(positions.history)}%</div>
+            <div>
+              Market:{" "}
+              <span
+                className={
+                  (latestSignal?.flags?.market_direction as string) === "bullish"
+                    ? "market-bullish"
+                    : (latestSignal?.flags?.market_direction as string) === "bearish"
+                      ? "market-bearish"
+                      : "market-neutral"
+                }
+              >
+                {(latestSignal?.flags?.market_direction as string) || "—"}
+              </span>
+            </div>
           </div>
           <div className="controls">
             <label>
@@ -266,33 +299,184 @@ export default function App() {
             {latestSignal && (
               <div className="decision">
                 <h3>Current Decision</h3>
+                <div className="market-status-badge">
+                  Market:{" "}
+                  <span
+                    className={
+                      (latestSignal.flags?.market_direction as string) === "bullish"
+                        ? "market-bullish"
+                        : (latestSignal.flags?.market_direction as string) === "bearish"
+                          ? "market-bearish"
+                          : "market-neutral"
+                    }
+                  >
+                    {(latestSignal.flags?.market_direction as string) || "neutral"}
+                  </span>
+                  {(latestSignal.flags?.direction_aligned as boolean) === false && (
+                    <span className="counter-trend-label"> (counter-trend)</span>
+                  )}
+                </div>
                 <pre>{JSON.stringify(latestSignal, null, 2)}</pre>
               </div>
             )}
           </div>
+          <div className="dashboard-trades">
+            <h3>Positions & Orders</h3>
+            <div className="trades-controls">
+              <label>
+                Date filter:{" "}
+                <select value={tradesPeriod} onChange={(e) => setTradesPeriod(e.target.value)}>
+                  <option value="day">Today</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                  <option value="year">Year</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+              <div className="trades-pnl-stats">
+                <span className={typeof positions.today_pnl === "number" && positions.today_pnl >= 0 ? "pnl-pos" : "pnl-neg"}>
+                  Today P/L: {typeof positions.today_pnl === "number" ? positions.today_pnl.toFixed(2) : "--"}
+                </span>
+                <span className={typeof positions.total_pnl === "number" && positions.total_pnl >= 0 ? "pnl-pos" : "pnl-neg"}>
+                  Total P/L: {typeof positions.total_pnl === "number" ? positions.total_pnl.toFixed(2) : "--"}
+                </span>
+                <span>Win rate: {typeof positions.win_rate === "number" ? positions.win_rate.toFixed(1) : "--"}%</span>
+                <span>Total trades: {positions.total_trades ?? "--"}</span>
+                <span>Avg win: {(positions as any).avg_win != null ? Number((positions as any).avg_win).toFixed(2) : "--"}</span>
+                <span>Avg loss: {(positions as any).avg_loss != null ? Number((positions as any).avg_loss).toFixed(2) : "--"}</span>
+                <span>Profit factor: {(positions as any).profit_factor != null ? Number((positions as any).profit_factor).toFixed(2) : "--"}</span>
+              </div>
+            </div>
+            <h4>Positions</h4>
+            <div className="trades-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time (ET)</th>
+                    <th>Asset</th>
+                    <th>Side</th>
+                    <th>Qty</th>
+                    <th>Entry</th>
+                    <th>Stop</th>
+                    <th>TP1</th>
+                    <th>TP2</th>
+                    <th>Status</th>
+                    <th>PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...positions.open, ...positions.history].map((p, idx) => {
+                    const isOpen = p.status === "open";
+                    const spot = positions.spot_by_symbol?.[p.symbol];
+                    const unrealized =
+                      isOpen && spot != null
+                        ? (p.side === "long" ? (spot - (p.entry_price ?? 0)) : ((p.entry_price ?? 0) - spot)) *
+                          (p.qty ?? 0)
+                        : null;
+                    const displayPnl = isOpen && unrealized != null ? unrealized : Number(p.realized_pnl ?? 0);
+                    const pnlLabel = isOpen && unrealized != null ? "unreal." : "realized";
+                    return (
+                      <tr key={p.position_id ?? (p as any)._id ?? idx}>
+                        <td>{p.opened_at ? formatEST(p.opened_at) : "--"}</td>
+                        <td>{p.symbol}</td>
+                        <td>{p.side}</td>
+                        <td>{Number(p.qty).toFixed(4)}</td>
+                        <td>{Number(p.entry_price ?? 0).toFixed(2)}</td>
+                        <td>{Number(p.stop_price ?? 0).toFixed(2)}</td>
+                        <td>{Number(p.tp1 ?? 0).toFixed(2)}</td>
+                        <td>{Number(p.tp2 ?? 0).toFixed(2)}</td>
+                        <td>{p.status}</td>
+                        <td className={displayPnl >= 0 ? "pnl-pos" : "pnl-neg"} title={pnlLabel}>
+                          {displayPnl.toFixed(2)}
+                          {isOpen && unrealized != null && (
+                            <span className="pnl-sublabel"> (u)</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <h4>Orders</h4>
+            <div className="trades-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time (ET)</th>
+                    <th>Asset</th>
+                    <th>Side</th>
+                    <th>Qty</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((o, idx) => (
+                    <tr key={(o as any).order_id ?? (o as any)._id ?? idx}>
+                      <td>{(o as any).created_at ? formatEST((o as any).created_at) : "--"}</td>
+                      <td>{(o as any).symbol}</td>
+                      <td>{(o as any).side}</td>
+                      <td>{Number((o as any).qty).toFixed(4)}</td>
+                      <td>{Number((o as any).price ?? (o as any).fill_price ?? 0).toFixed(2)}</td>
+                      <td>{(o as any).status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div className="dashboard-signals">
-            <h3>Latest Signals (last 1h)</h3>
+            <h3>Latest Signals (last 6h)</h3>
             <div className="signals-table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Time (ET)</th>
                     <th>Asset</th>
+                    <th>Market</th>
+                    <th>Spot</th>
+                    <th>Entry</th>
+                    <th>SL</th>
+                    <th>TP1</th>
+                    <th>TP2</th>
                     <th>Bias</th>
                     <th>Edge</th>
+                    <th>Unc.</th>
+                    <th>Threshold</th>
                     <th>Allowed</th>
                     <th>Reasons</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recentSignals.map((s, idx) => (
+                  {signalsToShow.map((s, idx) => (
                     <tr key={idx}>
                       <td>{s.timestamp ? formatEST(s.timestamp) : "--"}</td>
                       <td>{s.symbol}</td>
+                      <td>
+                        <span
+                          className={
+                            (s.flags?.market_direction as string) === "bullish"
+                              ? "market-bullish"
+                              : (s.flags?.market_direction as string) === "bearish"
+                                ? "market-bearish"
+                                : "market-neutral"
+                          }
+                        >
+                          {(s.flags?.market_direction as string) || "—"}
+                        </span>
+                      </td>
+                      <td>{formatPrice(s.spot)}</td>
+                      <td>{formatPrice(s.levels?.entry)}</td>
+                      <td>{formatPrice(s.levels?.stop)}</td>
+                      <td>{formatPrice(s.levels?.tp1)}</td>
+                      <td>{formatPrice(s.levels?.tp2)}</td>
                       <td>{s.bias}</td>
-                      <td>{s.edge.toFixed(4)}</td>
+                      <td>{typeof s.edge === "number" ? s.edge.toFixed(4) : "--"}</td>
+                      <td>{typeof s.uncertainty === "number" ? s.uncertainty.toFixed(4) : "--"}</td>
+                      <td>{defaultUncThreshold(s.market_type || "crypto")}</td>
                       <td>{String(s.allowed_to_trade)}</td>
-                      <td>{s.reasons.join(", ") || "none"}</td>
+                      <td>{s.reasons?.join(", ") || "none"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -321,101 +505,6 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-          </div>
-        </section>
-      )}
-
-      {page === "trades" && (
-        <section className="panel">
-          <h2>Trades / Orders</h2>
-          <div className="trades-controls">
-            <label>
-              Date filter:{" "}
-              <select value={tradesPeriod} onChange={(e) => setTradesPeriod(e.target.value)}>
-                <option value="day">Today</option>
-                <option value="week">Week</option>
-                <option value="month">Month</option>
-                <option value="year">Year</option>
-                <option value="all">All</option>
-              </select>
-            </label>
-            <div className="trades-pnl-stats">
-              <span className={typeof positions.today_pnl === "number" && positions.today_pnl >= 0 ? "pnl-pos" : "pnl-neg"}>
-                Today P/L: {typeof positions.today_pnl === "number" ? positions.today_pnl.toFixed(2) : "--"}
-              </span>
-              <span className={typeof positions.total_pnl === "number" && positions.total_pnl >= 0 ? "pnl-pos" : "pnl-neg"}>
-                Total P/L: {typeof positions.total_pnl === "number" ? positions.total_pnl.toFixed(2) : "--"}
-              </span>
-              <span>Win rate: {typeof positions.win_rate === "number" ? positions.win_rate.toFixed(1) : "--"}%</span>
-              <span>Total trades: {positions.total_trades ?? "--"}</span>
-              <span>Avg win: {(positions as any).avg_win != null ? Number((positions as any).avg_win).toFixed(2) : "--"}</span>
-              <span>Avg loss: {(positions as any).avg_loss != null ? Number((positions as any).avg_loss).toFixed(2) : "--"}</span>
-              <span>Profit factor: {(positions as any).profit_factor != null ? Number((positions as any).profit_factor).toFixed(2) : "--"}</span>
-            </div>
-          </div>
-          <h3>Positions</h3>
-          <div className="trades-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time (ET)</th>
-                  <th>Asset</th>
-                  <th>Side</th>
-                  <th>Qty</th>
-                  <th>Entry (price)</th>
-                  <th>Stop (price)</th>
-                  <th>TP1</th>
-                  <th>TP2</th>
-                  <th>Status</th>
-                  <th>PnL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...positions.open, ...positions.history].map((p, idx) => (
-                  <tr key={p.position_id ?? p._id ?? idx}>
-                    <td>{p.opened_at ? formatEST(p.opened_at) : "--"}</td>
-                    <td>{p.symbol}</td>
-                    <td>{p.side}</td>
-                    <td>{Number(p.qty).toFixed(4)}</td>
-                    <td>{Number(p.entry_price ?? 0).toFixed(2)}</td>
-                    <td>{Number(p.stop_price ?? 0).toFixed(2)}</td>
-                    <td>{Number(p.tp1 ?? 0).toFixed(2)}</td>
-                    <td>{Number(p.tp2 ?? 0).toFixed(2)}</td>
-                    <td>{p.status}</td>
-                    <td className={Number(p.realized_pnl ?? 0) >= 0 ? "pnl-pos" : "pnl-neg"}>
-                      {Number(p.realized_pnl ?? 0).toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <h3>Orders</h3>
-          <div className="trades-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time (ET)</th>
-                  <th>Asset</th>
-                  <th>Side</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((o, idx) => (
-                  <tr key={o.order_id ?? o._id ?? idx}>
-                    <td>{o.created_at ? formatEST(o.created_at) : "--"}</td>
-                    <td>{o.symbol}</td>
-                    <td>{o.side}</td>
-                    <td>{Number(o.qty).toFixed(4)}</td>
-                    <td>{Number(o.price ?? o.fill_price ?? 0).toFixed(2)}</td>
-                    <td>{o.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         </section>
       )}

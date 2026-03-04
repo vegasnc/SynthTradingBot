@@ -121,16 +121,14 @@ async def fetch_crypto_prices(
         candles_5m: list[dict] | None = None
 
         binance_pair = _to_binance_pair(symbol)
-        candles_1m = await _fetch_binance(client, binance_pair, "1m", 50)
-        candles_5m = await _fetch_binance(client, binance_pair, "5m", 24)
-
+        kraken_pair = _to_kraken_pair(symbol)
+        # Try Kraken first (works in US); fall back to Binance (may return 451 geo-block)
+        if kraken_pair:
+            candles_1m = await _fetch_kraken(client, kraken_pair, 1, 50)
+            candles_5m = await _fetch_kraken(client, kraken_pair, 5, 72)
         if candles_1m is None or candles_5m is None:
-            kraken_pair = _to_kraken_pair(symbol)
-            if kraken_pair:
-                if candles_1m is None:
-                    candles_1m = await _fetch_kraken(client, kraken_pair, 1, 50)
-                if candles_5m is None:
-                    candles_5m = await _fetch_kraken(client, kraken_pair, 5, 24)
+            candles_1m = candles_1m or await _fetch_binance(client, binance_pair, "1m", 50)
+            candles_5m = candles_5m or await _fetch_binance(client, binance_pair, "5m", 72)
 
         if candles_1m and candles_5m:
             spot = candles_1m[-1]["close"]

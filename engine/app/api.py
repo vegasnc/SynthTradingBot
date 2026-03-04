@@ -84,20 +84,29 @@ def build_app() -> Starlette:
         synth_refresh_minutes=settings.synth_refresh_minutes,
         synth_price_change_refresh_pct=settings.synth_price_change_refresh_pct,
         synth_price_change_period_minutes=settings.synth_price_change_period_minutes,
+        market_strength_counter_trend_multiplier=settings.market_strength_counter_trend_multiplier,
+        market_strength_lookback_minutes=settings.market_strength_lookback_minutes,
     )
     ws_manager = WSManager(state)
 
     async def _market_data_loop() -> None:
-        """Fetch crypto prices server-side every 30s (avoids browser CORS + Binance 451)."""
+        """Fetch crypto prices server-side every 5s for fast position monitoring (crypto volatility)."""
+        log = logging.getLogger("app.api")
         async with httpx.AsyncClient() as client:
             while True:
                 try:
                     prices = await fetch_crypto_prices(client, state.symbols)
-                    for sym, data in prices.items():
-                        state.latest_market_data[sym] = data
+                    if prices:
+                        for sym, data in prices.items():
+                            state.latest_market_data[sym] = data
+                        state.last_market_data_success_at = utc_now()
+                        state.last_market_data_error = None
+                    else:
+                        state.last_market_data_error = "All symbols failed (Binance/Kraken)"
                 except Exception as e:
-                    logging.getLogger("app.api").exception("market data fetch failed: %s", e)
-                await asyncio.sleep(30)
+                    state.last_market_data_error = str(e)
+                    log.exception("market data fetch failed: %s", e)
+                await asyncio.sleep(5)
 
     @asynccontextmanager
     async def lifespan(_: Starlette):
@@ -151,7 +160,12 @@ def build_app() -> Starlette:
             })
         return JSONResponse({
             "symbols": status,
-            "hint": "Dashboard must be open and pushing prices via POST /prices. Only crypto symbols get Binance data.",
+            "last_market_data_error": state.last_market_data_error,
+            "last_market_data_success_at": (
+                state.last_market_data_success_at.isoformat()
+                if state.last_market_data_success_at else None
+            ),
+            "hint": "Crypto: server-side Binance/Kraken. Equity: needs dashboard POST /prices.",
         })
 
     async def get_predictions(request: Request) -> JSONResponse:
@@ -211,11 +225,18 @@ def build_app() -> Starlette:
         gross_profit = sum(wins)
         gross_loss = abs(sum(losses))
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+        spot_by_symbol = dict(state.latest_price)
+        for sym, mkt in state.latest_market_data.items():
+            if sym not in spot_by_symbol and mkt:
+                s = mkt.get("spot")
+                if s is not None:
+                    spot_by_symbol[sym] = float(s)
         return JSONResponse(_mongo_to_json({
             "open": open_list, "history": history,
             "today_pnl": today_pnl, "total_pnl": total_pnl, "win_rate": win_rate, "total_trades": len(all_closed),
             "avg_win": avg_win, "avg_loss": avg_loss, "largest_win": largest_win, "largest_loss": largest_loss,
             "profit_factor": profit_factor,
+            "spot_by_symbol": spot_by_symbol,
         }))
 
     async def get_orders(request: Request) -> JSONResponse:

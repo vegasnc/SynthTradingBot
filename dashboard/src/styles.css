@@ -50,9 +50,34 @@ button {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.market-bullish {
+  color: #059669;
+  font-weight: 600;
+}
+
+.market-bearish {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.market-neutral {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.market-status-badge {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.counter-trend-label {
+  color: #d97706;
+  font-size: 12px;
 }
 
 .controls {
@@ -107,6 +132,25 @@ pre {
 
 .dashboard-chart-row .decision {
   flex: 0 0 340px;
+}
+
+.dashboard-trades {
+  margin-top: 0;
+  margin-bottom: 24px;
+}
+
+.dashboard-trades h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+}
+
+.dashboard-trades h4 {
+  margin: 16px 0 8px 0;
+  font-size: 13px;
+}
+
+.dashboard-trades .trades-table-wrap {
+  max-height: 220px;
 }
 
 .dashboard-signals {
@@ -190,6 +234,11 @@ pre {
 .pnl-neg {
   color: #dc2626;
   font-weight: 500;
+}
+
+.pnl-sublabel {
+  font-size: 10px;
+  opacity: 0.8;
 }
 
 .trades-table-wrap {

@@ -16,7 +16,7 @@ export interface Signal {
   allowed_to_trade: boolean;
   reasons: string[];
   levels: Record<string, number>;
-  flags: Record<string, boolean>;
+  flags: Record<string, boolean | string>;
 }
 
 export interface Position {

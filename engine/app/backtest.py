@@ -21,7 +21,7 @@ def run_backtest(candles_1m: dict[str, list[dict[str, Any]]], candles_5m: dict[s
             total += 1
             p = SynthClient.parse_percentiles({"percentiles": pred["percentiles"]})
             spot = candles_1m[symbol][-1]["close"]
-            decision = build_decision(spot, p, pred.get("market_type", "crypto"), in_cooldown=False)
+            decision = build_decision(spot, p, pred.get("market_type", "crypto"))
             if decision.allowed_to_trade and confirm_entry(decision.bias, decision.entry, candles_1m[symbol][-3:], candles_5m[symbol][-2:]):
                 tradable += 1
     return BacktestResult(total_signals=total, tradable_signals=tradable)

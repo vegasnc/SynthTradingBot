@@ -67,8 +67,12 @@ class Settings:
         self.paper_slippage_bps: float = _get_float("PAPER_SLIPPAGE_BPS", 5.0)
         self.finnhub_api_key: str = _get_str("FINNHUB_API_KEY")
         self.synth_refresh_minutes: int = _get_int("SYNTH_REFRESH_MINUTES", 10)
-        self.synth_price_change_refresh_pct: float = _get_float("SYNTH_PRICE_CHANGE_REFRESH_PCT", 1.0)
+        self.synth_price_change_refresh_pct: float = _get_float("SYNTH_PRICE_CHANGE_REFRESH_PCT", 0.3)
         self.synth_price_change_period_minutes: int = _get_int("SYNTH_PRICE_CHANGE_PERIOD_MINUTES", 2)
+        self.market_strength_counter_trend_multiplier: float = _get_float(
+            "MARKET_STRENGTH_COUNTER_TREND_MULTIPLIER", 1.5
+        )
+        self.market_strength_lookback_minutes: int = _get_int("MARKET_STRENGTH_LOOKBACK_MINUTES", 120)
 
     def parse_symbols(self) -> list[SymbolConfig]:
         parsed: list[SymbolConfig] = []
@@ -89,4 +93,13 @@ class Settings:
         p = Path(self.synth_endpoints_file)
         if p.is_absolute():
             return p
-        return (Path(__file__).resolve().parent / self.synth_endpoints_file).resolve()
+        base = Path(__file__).resolve().parent
+        candidates = [
+            (base / self.synth_endpoints_file).resolve(),
+            (base / "../../synth_api_endpoints.json").resolve(),
+            (base / "../../reference_doc/synth_api_endpoints.json").resolve(),
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return candidates[0]  # return first even if missing; SynthClient handles missing
