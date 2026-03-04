@@ -69,23 +69,29 @@ def _build_decision_for_bias(
 
     if bias == "long":
         edge = (pct.p50 - spot) / spot
-        entry = max(pct.p35, spot - 0.20 * central_range)
-        stop_base = (pct.p05 + pct.p20) / 2
-        stop = stop_base - (0.08 * central_range)
         tp1 = (pct.p50 + pct.p65) / 2
         tp2 = pct.p65
+        entry = max(pct.p35, spot - 0.20 * central_range)
+        entry = min(entry, tp1 - 0.002 * spot)
+        stop_base = (pct.p05 + pct.p20) / 2
+        stop = stop_base - (0.08 * central_range)
+        if entry >= tp1 or stop >= entry:
+            reasons.append("invalid_levels_long")
     else:
         edge = (spot - pct.p50) / spot
-        entry = min(pct.p65, spot + 0.20 * central_range)
-        stop_base = (pct.p80 + pct.p95) / 2
-        stop = stop_base + (0.08 * central_range)
         tp1 = (pct.p35 + pct.p50) / 2
         tp2 = pct.p35
+        entry = min(pct.p65, spot + 0.20 * central_range)
+        entry = max(entry, tp1 + 0.002 * spot)
+        stop_base = (pct.p80 + pct.p95) / 2
+        stop = stop_base + (0.08 * central_range)
+        if entry <= tp1 or stop <= entry:
+            reasons.append("invalid_levels_short")
 
     flags["edge_filter_pass"] = abs(edge) >= 0.10 * uncertainty
     if not flags["edge_filter_pass"]:
         reasons.append("edge_below_threshold")
-    allowed = all(flags.values())
+    allowed = all(flags.values()) and "invalid_levels_long" not in reasons and "invalid_levels_short" not in reasons
     return Decision(
         bias=bias,
         edge=edge,

@@ -352,6 +352,7 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>No</th>
                     <th>Time (ET)</th>
                     <th>Asset</th>
                     <th>Side</th>
@@ -377,6 +378,7 @@ export default function App() {
                     const pnlLabel = isOpen && unrealized != null ? "unreal." : "realized";
                     return (
                       <tr key={p.position_id ?? (p as any)._id ?? idx}>
+                        <td>{idx + 1}</td>
                         <td>{p.opened_at ? formatEST(p.opened_at) : "--"}</td>
                         <td>{p.symbol}</td>
                         <td>{p.side}</td>
@@ -403,6 +405,7 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>No</th>
                     <th>Time (ET)</th>
                     <th>Asset</th>
                     <th>Side</th>
@@ -414,6 +417,7 @@ export default function App() {
                 <tbody>
                   {orders.map((o, idx) => (
                     <tr key={(o as any).order_id ?? (o as any)._id ?? idx}>
+                      <td>{idx + 1}</td>
                       <td>{(o as any).created_at ? formatEST((o as any).created_at) : "--"}</td>
                       <td>{(o as any).symbol}</td>
                       <td>{(o as any).side}</td>
@@ -432,6 +436,7 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>No</th>
                     <th>Time (ET)</th>
                     <th>Asset</th>
                     <th>Market</th>
@@ -451,6 +456,7 @@ export default function App() {
                 <tbody>
                   {signalsToShow.map((s, idx) => (
                     <tr key={idx}>
+                      <td>{idx + 1}</td>
                       <td>{s.timestamp ? formatEST(s.timestamp) : "--"}</td>
                       <td>{s.symbol}</td>
                       <td>
@@ -489,6 +495,7 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>No</th>
                     <th>Time (ET)</th>
                     <th>API</th>
                     <th>Params</th>
@@ -497,6 +504,7 @@ export default function App() {
                 <tbody>
                   {synthCalls.slice(0, 50).map((c, idx) => (
                     <tr key={idx}>
+                      <td>{idx + 1}</td>
                       <td>{c.ts ? formatEST(c.ts) : "--"}</td>
                       <td>{c.api || "--"}</td>
                       <td><code>{JSON.stringify(c.params || {})}</code></td>

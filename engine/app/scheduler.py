@@ -18,7 +18,6 @@ from .strategy import (
     compute_position_size,
     confirm_entry,
     market_direction_from_momentum,
-    tighten_stop,
 )
 from .synth_client import SynthClient
 from .utils import as_utc, floor_to_minute, is_equity_tradable_now, utc_now
@@ -270,7 +269,7 @@ class EngineScheduler:
     async def _try_open_position(self, cfg: SymbolConfig, signal: dict[str, Any], spot: float) -> None:
         symbol = cfg.symbol
         new_side = signal["bias"]
-        entry_price = signal["levels"]["entry"]
+        entry_price = float(signal["levels"]["entry"])
         open_positions = await self._open_positions_for_symbol(symbol)
         same_side = [p for p in open_positions if p.get("side") == new_side]
         if same_side:
@@ -291,10 +290,10 @@ class EngineScheduler:
                 if spot < best_existing:
                     logger.info("skip open %s short: spot %.2f below existing entry %.2f (would chase)", symbol, spot, best_existing)
                     return
-        side = "buy" if new_side == "long" else "sell"
         levels = signal["levels"]
+        stop_price = float(levels.get("stop", 0))
+        side = "buy" if new_side == "long" else "sell"
         risk_pct = self.state.crypto_risk_pct if cfg.market_type == "crypto" else self.state.equity_risk_pct
-        stop_price = levels["stop"]
         # Optional liquidation-aware adjustment for crypto: move stop 0.3% outside nearest high-probability band and reduce size.
         size_scale = 1.0
         if cfg.market_type == "crypto":
@@ -385,12 +384,9 @@ class EngineScheduler:
             if hit_tp1 and not pos["tp1_done"]:
                 close_qty = qty * 0.4
                 pnl = ((spot - pos["entry_price"]) if side == "long" else (pos["entry_price"] - spot)) * close_qty
-                set_fields: dict[str, Any] = {"tp1_done": True}
-                if signal and signal.get("levels"):
-                    set_fields["stop_price"] = signal["levels"].get("p35" if side == "long" else "p65", stop)
                 await self.store.db.positions.update_one(
                     {"_id": pos["_id"]},
-                    {"$set": set_fields, "$inc": {"realized_pnl": pnl, "qty": -close_qty}},
+                    {"$set": {"tp1_done": True}, "$inc": {"realized_pnl": pnl, "qty": -close_qty}},
                 )
             if hit_tp2 and not pos["tp2_done"]:
                 close_qty = qty * 0.4
@@ -399,16 +395,6 @@ class EngineScheduler:
                     {"_id": pos["_id"]},
                     {"$set": {"tp2_done": True}, "$inc": {"realized_pnl": pnl, "qty": -close_qty}},
                 )
-
-            if hit_tp1 and signal and signal.get("levels"):
-                new_stop = tighten_stop(
-                    stop, side, self.synth.parse_percentiles({"percentiles": signal["levels"]}), tp1_hit=True
-                )
-                if side == "long":
-                    new_stop = max(stop, new_stop)
-                else:
-                    new_stop = min(stop, new_stop)
-                await self.store.db.positions.update_one({"_id": pos["_id"]}, {"$set": {"stop_price": new_stop}})
 
             pos_cur = await self.store.db.positions.find_one({"_id": pos["_id"]})
             if not pos_cur:
