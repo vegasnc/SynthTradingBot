@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { api, API_BASE, stream } from "./api";
 import { BinanceChart } from "./BinanceChart";
 import { fetchAndPushPrices } from "./marketData";
@@ -39,7 +40,7 @@ function defaultUncThreshold(marketType: string): string {
   return marketType === "equity" ? "≤0.05" : "≤0.08";
 }
 
-type Page = "overview" | "trades" | "settings";
+type Page = "overview" | "news" | "strike" | "settings";
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 function signalsWithinWindow(signals: Signal[], windowMs = SIX_HOURS_MS): Signal[] {
@@ -91,6 +92,19 @@ export default function App() {
   const [engineStatus, setEngineStatus] = useState<{
     symbols: { symbol: string; has_market_data: boolean; can_produce_signals: boolean }[];
     hint: string;
+  } | null>(null);
+  const [newsToday, setNewsToday] = useState<{
+    date: string;
+    summary: string;
+    sticky_notes: { title: string; text: string }[];
+    asset_bias: Record<string, string>;
+    created_at?: string;
+  } | null>(null);
+  const [newsRaw, setNewsRaw] = useState<any[]>([]);
+  const [strikeLatest, setStrikeLatest] = useState<{
+    allocations: Record<string, { weight: number; confidence: number; bias: string; edge: number; uncertainty: number }>;
+    timestamp: string | null;
+    horizon?: string;
   } | null>(null);
 
   async function loadAll() {
@@ -146,6 +160,13 @@ export default function App() {
       api.signals(undefined, 200).then(setOverviewSignals).catch(console.error);
       api.status().then(setEngineStatus).catch(() => setEngineStatus(null));
     }
+    if (page === "news") {
+      api.newsToday().then(setNewsToday).catch(() => setNewsToday(null));
+      api.newsRaw(100).then(setNewsRaw).catch(() => setNewsRaw([]));
+    }
+    if (page === "strike") {
+      api.strikeLatest().then(setStrikeLatest).catch(() => setStrikeLatest(null));
+    }
   }, [page, selected]);
 
   useEffect(() => {
@@ -184,6 +205,13 @@ export default function App() {
       if (page === "overview") {
         api.synthCalls().then(setSynthCalls).catch(() => {});
         api.status().then(setEngineStatus).catch(() => setEngineStatus(null));
+      }
+      if (page === "news") {
+        api.newsToday().then(setNewsToday).catch(() => setNewsToday(null));
+        api.newsRaw(100).then(setNewsRaw).catch(() => setNewsRaw([]));
+      }
+      if (page === "strike") {
+        api.strikeLatest().then(setStrikeLatest).catch(() => setStrikeLatest(null));
       }
     }, refreshMs);
     return () => {
@@ -233,6 +261,8 @@ export default function App() {
 
       <nav>
         <button onClick={() => setPage("overview")}>Dashboard</button>
+        <button onClick={() => setPage("news")}>News</button>
+        <button onClick={() => setPage("strike")}>Strike</button>
         <button onClick={() => setPage("settings")}>Settings</button>
       </nav>
 
@@ -359,8 +389,7 @@ export default function App() {
                     <th>Qty</th>
                     <th>Entry</th>
                     <th>Stop</th>
-                    <th>TP1</th>
-                    <th>TP2</th>
+                    <th>TP</th>
                     <th>Status</th>
                     <th>PnL</th>
                   </tr>
@@ -385,8 +414,7 @@ export default function App() {
                         <td>{Number(p.qty).toFixed(4)}</td>
                         <td>{Number(p.entry_price ?? 0).toFixed(2)}</td>
                         <td>{Number(p.stop_price ?? 0).toFixed(2)}</td>
-                        <td>{Number(p.tp1 ?? 0).toFixed(2)}</td>
-                        <td>{Number(p.tp2 ?? 0).toFixed(2)}</td>
+                        <td>{Number(p.tp ?? p.tp1 ?? p.tp2 ?? 0).toFixed(2)}</td>
                         <td>{p.status}</td>
                         <td className={displayPnl >= 0 ? "pnl-pos" : "pnl-neg"} title={pnlLabel}>
                           {displayPnl.toFixed(2)}
@@ -451,6 +479,7 @@ export default function App() {
                     <th>Threshold</th>
                     <th>Allowed</th>
                     <th>Reasons</th>
+                    <th>Skip Reason</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -483,6 +512,7 @@ export default function App() {
                       <td>{defaultUncThreshold(s.market_type || "crypto")}</td>
                       <td>{String(s.allowed_to_trade)}</td>
                       <td>{s.reasons?.join(", ") || "none"}</td>
+                      <td title={s.trade_skipped_reason}>{s.trade_skipped_reason || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -513,6 +543,146 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </section>
+      )}
+
+      {page === "news" && (
+        <section className="panel">
+          <h2>News</h2>
+          <div style={{ marginBottom: 12 }}>
+            <button
+              onClick={() =>
+                api.newsRefresh().then(() => {
+                  api.newsToday().then(setNewsToday);
+                  api.newsRaw(100).then(setNewsRaw);
+                })
+              }
+            >
+              Scrape & Summarize
+            </button>
+            <button
+              style={{ marginLeft: 8 }}
+              onClick={() =>
+                api.newsSummarize().then(() => {
+                  api.newsToday().then(setNewsToday);
+                })
+              }
+            >
+              Summarize from DB
+            </button>
+          </div>
+          {newsToday?.summary && (
+            <div className="news-summary">
+              <h3>Today&apos;s Summary</h3>
+              <p>{newsToday.summary}</p>
+            </div>
+          )}
+          {newsToday?.sticky_notes && newsToday.sticky_notes.length > 0 && (
+            <div className="news-sticky-notes">
+              {newsToday.sticky_notes.map((note, i) => (
+                <div key={i} className="sticky-note">
+                  <h4>{note.title}</h4>
+                  <p>{note.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {newsToday?.asset_bias && Object.keys(newsToday.asset_bias).length > 0 && (
+            <div className="news-asset-bias">
+              <h3>Asset Bias</h3>
+              <div className="asset-bias-grid">
+                {Object.entries(newsToday.asset_bias).map(([asset, bias]) => (
+                  <span key={asset} className={`bias-${bias}`}>
+                    {asset}: {bias}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <h3>Raw News</h3>
+          <div className="trades-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Title</th>
+                  <th>Source</th>
+                  <th>Snippet</th>
+                  <th>Published</th>
+                </tr>
+              </thead>
+              <tbody>
+                {newsRaw.map((r, idx) => (
+                  <tr key={idx}>
+                    <td>{idx + 1}</td>
+                    <td><a href={r.url} target="_blank" rel="noreferrer">{r.title}</a></td>
+                    <td>{r.source}</td>
+                    <td>{(r.snippet || "").length > 150 ? `${String(r.snippet).slice(0, 150)}...` : String(r.snippet || "")}</td>
+                    <td>{r.published_at ? formatEST(r.published_at) : "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {page === "strike" && (
+        <section className="panel">
+          <h2>Strike Portfolio Allocation</h2>
+          <p>Last updated: {strikeLatest?.timestamp ? formatEST(strikeLatest.timestamp) : "--"}</p>
+          <button onClick={() => api.strikeRefresh().then(() => api.strikeLatest().then(setStrikeLatest))}>
+            Refresh
+          </button>
+          {strikeLatest?.allocations && Object.keys(strikeLatest.allocations).length > 0 && (
+            <div className="strike-chart" style={{ height: 280, marginBottom: 16 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={Object.entries(strikeLatest.allocations).map(([asset, a]) => ({
+                    name: asset,
+                    weight: Number((a.weight * 100).toFixed(1)),
+                    fill: a.bias === "long" ? "#059669" : a.bias === "short" ? "#dc2626" : "#6b7280",
+                  }))}
+                >
+                  <XAxis dataKey="name" />
+                  <YAxis unit="%" />
+                  <Tooltip formatter={(v: number) => [`${v}%`, "Weight"]} />
+                  <Bar dataKey="weight">
+                    {Object.entries(strikeLatest.allocations).map(([asset, a], i) => (
+                      <Cell key={asset} fill={a.bias === "long" ? "#059669" : a.bias === "short" ? "#dc2626" : "#6b7280"} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          <div className="strike-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Weight</th>
+                  <th>Confidence</th>
+                  <th>Bias</th>
+                  <th>Edge</th>
+                  <th>Uncertainty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {strikeLatest?.allocations &&
+                  Object.entries(strikeLatest.allocations).map(([asset, a]) => (
+                    <tr key={asset}>
+                      <td>{asset}</td>
+                      <td>{(a.weight * 100).toFixed(1)}%</td>
+                      <td>{a.confidence}</td>
+                      <td className={`bias-${a.bias}`}>{a.bias}</td>
+                      <td>{(a.edge * 100).toFixed(2)}%</td>
+                      <td>{(a.uncertainty * 100).toFixed(2)}%</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
           </div>
         </section>
       )}

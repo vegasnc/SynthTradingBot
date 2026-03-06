@@ -146,3 +146,52 @@ async def fetch_crypto_prices(
         else:
             logger.warning("No market data for %s (Binance and Kraken failed)", symbol)
     return out
+
+
+async def fetch_spot_prices(
+    client: httpx.AsyncClient,
+    symbols: list[SymbolConfig],
+) -> dict[str, float]:
+    """Fetch current spot prices only (lightweight, for real-time TP/stop detection)."""
+    out: dict[str, float] = {}
+    for cfg in symbols:
+        if cfg.market_type != "crypto":
+            continue
+        symbol = cfg.symbol
+        binance_pair = _to_binance_pair(symbol)
+        kraken_pair = _to_kraken_pair(symbol)
+
+        price: float | None = None
+        if kraken_pair:
+            try:
+                resp = await client.get(
+                    f"{KRAKEN_BASE}/Ticker",
+                    params={"pair": kraken_pair},
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not data.get("error"):
+                        result = data.get("result", {})
+                        pair_data = result.get(kraken_pair) or (list(result.values())[0] if result else None)
+                        if pair_data and isinstance(pair_data, dict):
+                            c = pair_data.get("c")
+                            if isinstance(c, (list, tuple)) and c:
+                                price = float(c[0])
+            except Exception:
+                pass
+        if price is None:
+            try:
+                resp = await client.get(
+                    f"{BINANCE_BASE}/ticker/price",
+                    params={"symbol": binance_pair},
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    price = float(data.get("price", 0) or 0)
+            except Exception:
+                pass
+        if price and price > 0:
+            out[symbol] = price
+    return out

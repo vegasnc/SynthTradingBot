@@ -49,6 +49,7 @@ class Decision:
     stop: float
     tp1: float
     tp2: float
+    tp: float
     central_range: float
     range_: float
     flags: dict[str, bool]
@@ -92,6 +93,7 @@ def _build_decision_for_bias(
     if not flags["edge_filter_pass"]:
         reasons.append("edge_below_threshold")
     allowed = all(flags.values()) and "invalid_levels_long" not in reasons and "invalid_levels_short" not in reasons
+    tp = (tp1 + tp2) / 2
     return Decision(
         bias=bias,
         edge=edge,
@@ -102,6 +104,7 @@ def _build_decision_for_bias(
         stop=stop,
         tp1=tp1,
         tp2=tp2,
+        tp=tp,
         central_range=central_range,
         range_=range_,
         flags=flags,

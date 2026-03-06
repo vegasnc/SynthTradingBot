@@ -4,6 +4,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from starlette.applications import Starlette
@@ -19,7 +20,7 @@ from .broker import PaperBroker
 from .config import Settings, SymbolConfig
 from .db import MongoStore
 from .logging_utils import setup_logging
-from .market_data import fetch_crypto_prices
+from .market_data import fetch_crypto_prices, fetch_spot_prices
 from .scheduler import EngineScheduler
 from .state import EngineState
 from .synth_client import SynthClient
@@ -80,6 +81,7 @@ def build_app() -> Starlette:
         synth,
         broker,
         state,
+        settings,
         loop_seconds=settings.engine_loop_seconds,
         synth_refresh_minutes=settings.synth_refresh_minutes,
         synth_price_change_refresh_pct=settings.synth_price_change_refresh_pct,
@@ -90,7 +92,7 @@ def build_app() -> Starlette:
     ws_manager = WSManager(state)
 
     async def _market_data_loop() -> None:
-        """Fetch crypto prices server-side every 5s for fast position monitoring (crypto volatility)."""
+        """Fetch full crypto market data (candles) every 5s."""
         log = logging.getLogger("app.api")
         async with httpx.AsyncClient() as client:
             while True:
@@ -108,16 +110,46 @@ def build_app() -> Starlette:
                     log.exception("market data fetch failed: %s", e)
                 await asyncio.sleep(5)
 
+    async def _spot_price_loop() -> None:
+        """Fetch spot prices every 1s for real-time TP/stop detection."""
+        log = logging.getLogger("app.api")
+        from .config import SymbolConfig
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    # Include symbols with open positions (in case config changed)
+                    config_symbols = list(state.symbols)
+                    try:
+                        pos_cursor = store.db.positions.find({"status": "open"}, {"symbol": 1})
+                        pos_symbols = {p["symbol"] for p in await pos_cursor.to_list(200)}
+                        for s in pos_symbols:
+                            if s not in (c.symbol for c in config_symbols):
+                                config_symbols.append(SymbolConfig(symbol=s, market_type="crypto"))
+                    except Exception:
+                        pass
+                    spots = await fetch_spot_prices(client, config_symbols)
+                    for sym, spot in spots.items():
+                        existing = state.latest_market_data.get(sym)
+                        if existing:
+                            state.latest_market_data[sym] = {**existing, "spot": spot, "received_at": utc_now()}
+                        else:
+                            state.latest_market_data[sym] = {"spot": spot, "received_at": utc_now(), "market_type": "crypto", "candles_1m": [], "candles_5m": []}
+                except Exception as e:
+                    log.debug("spot price fetch failed: %s", e)
+                await asyncio.sleep(1)
+
     @asynccontextmanager
     async def lifespan(_: Starlette):
         await store.setup_indexes()
         scheduler_task = asyncio.create_task(scheduler.run_forever())
         ws_task = asyncio.create_task(_ws_pump(ws_manager))
         market_task = asyncio.create_task(_market_data_loop())
+        spot_task = asyncio.create_task(_spot_price_loop())
         yield
         scheduler_task.cancel()
         ws_task.cancel()
         market_task.cancel()
+        spot_task.cancel()
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({
@@ -227,10 +259,16 @@ def build_app() -> Starlette:
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
         spot_by_symbol = dict(state.latest_price)
         for sym, mkt in state.latest_market_data.items():
-            if sym not in spot_by_symbol and mkt:
+            if mkt:
                 s = mkt.get("spot")
-                if s is not None:
+                if s is not None and s > 0:
                     spot_by_symbol[sym] = float(s)
+        for p in open_list + history:
+            sym = p.get("symbol")
+            if sym and sym not in spot_by_symbol:
+                alt = f"{sym}-USD" if "-" not in sym else sym.replace("-USD", "")
+                if alt in spot_by_symbol:
+                    spot_by_symbol[sym] = spot_by_symbol[alt]
         return JSONResponse(_mongo_to_json({
             "open": open_list, "history": history,
             "today_pnl": today_pnl, "total_pnl": total_pnl, "win_rate": win_rate, "total_trades": len(all_closed),
@@ -307,6 +345,87 @@ def build_app() -> Starlette:
             }
         return JSONResponse({"ok": True, "received": len(prices)})
 
+    async def get_news_today(_: Request) -> JSONResponse:
+        tz_str = getattr(settings, "news_timezone", "America/New_York")
+        try:
+            tz = ZoneInfo(tz_str)
+        except Exception:
+            tz = ZoneInfo("America/New_York")
+        today = datetime.now(tz).date().isoformat()
+        doc = await store.db.news_daily_summary.find_one({"date": today})
+        if not doc:
+            return JSONResponse({"date": today, "summary": None, "sticky_notes": [], "asset_bias": {}})
+        return JSONResponse(_mongo_to_json({
+            "date": doc.get("date"),
+            "timezone": doc.get("timezone"),
+            "created_at": doc.get("created_at"),
+            "summary": doc.get("summary", ""),
+            "sticky_notes": doc.get("sticky_notes", []),
+            "asset_bias": doc.get("asset_bias", {}),
+        }))
+
+    async def get_news_raw(request: Request) -> JSONResponse:
+        limit = int(request.query_params.get("limit", 100))
+        cursor = store.db.news_raw.find().sort("fetched_at", -1).limit(limit)
+        rows = _mongo_to_json(await cursor.to_list(length=limit))
+        return JSONResponse(rows)
+
+    async def post_news_refresh(_: Request) -> JSONResponse:
+        """Scrape news, store in MongoDB, retrieve from MongoDB, generate summary with OpenAI."""
+        try:
+            from news_analyzer import run_daily_news_analysis
+            created = await run_daily_news_analysis(
+                store,
+                settings.news_timezone,
+                settings.openai_api_key,
+                force=True,
+                scrape=True,
+            )
+            return JSONResponse({"ok": True, "created": created})
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    async def post_news_summarize(_: Request) -> JSONResponse:
+        """Generate today's summary from news already in MongoDB (no scrape)."""
+        try:
+            from news_analyzer import run_daily_news_analysis
+            created = await run_daily_news_analysis(
+                store,
+                settings.news_timezone,
+                settings.openai_api_key,
+                force=True,
+                scrape=False,
+            )
+            return JSONResponse({"ok": True, "created": created})
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    async def get_strike_latest(_: Request) -> JSONResponse:
+        doc = await store.db.strike_snapshots.find_one({}, sort=[("timestamp", -1)])
+        if not doc:
+            return JSONResponse({"allocations": {}, "timestamp": None})
+        return JSONResponse(_mongo_to_json({
+            "allocations": doc.get("allocations", {}),
+            "timestamp": doc.get("timestamp"),
+            "horizon": doc.get("horizon"),
+        }))
+
+    async def get_strike_history(request: Request) -> JSONResponse:
+        limit = int(request.query_params.get("limit", 50))
+        cursor = store.db.strike_snapshots.find({}, sort=[("timestamp", -1)]).limit(limit)
+        rows = _mongo_to_json(await cursor.to_list(length=limit))
+        return JSONResponse(rows)
+
+    async def post_strike_refresh(_: Request) -> JSONResponse:
+        try:
+            from strike_tool import run_strike_refresh
+            result = await run_strike_refresh(
+                synth, store, state, settings.strike_symbols,
+            )
+            return JSONResponse(_mongo_to_json({"ok": True, "allocations": result.get("allocations", {})}))
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
     async def post_controls(request: Request) -> JSONResponse:
         try:
             req = await request.json()
@@ -354,6 +473,13 @@ def build_app() -> Starlette:
         Route("/positions", get_positions),
         Route("/orders", get_orders),
         Route("/candles", get_candles),
+        Route("/news/today", get_news_today),
+        Route("/news/raw", get_news_raw),
+        Route("/news/refresh", post_news_refresh, methods=["POST"]),
+        Route("/news/summarize", post_news_summarize, methods=["POST"]),
+        Route("/strike/latest", get_strike_latest),
+        Route("/strike/history", get_strike_history),
+        Route("/strike/refresh", post_strike_refresh, methods=["POST"]),
         Route("/prices", post_prices, methods=["POST"]),
         Route("/controls", post_controls, methods=["POST"]),
         WebSocketRoute("/stream", stream_ws),

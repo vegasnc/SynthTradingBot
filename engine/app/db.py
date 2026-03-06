@@ -24,6 +24,10 @@ class MongoStore:
         await self.db.positions.create_index([("symbol", 1), ("status", 1), ("opened_at", -1)])
         await self.db.events.create_index([("ts", -1)])
         await self.db.synth_api_calls.create_index([("ts", -1)])
+        await self.db.news_raw.create_index([("hash", 1)], unique=True)
+        await self.db.news_raw.create_index([("fetched_at", -1)])
+        await self.db.news_daily_summary.create_index([("date", 1)], unique=True)
+        await self.db.strike_snapshots.create_index([("timestamp", -1)])
 
     async def insert_synth_call(self, api: str, params: dict[str, Any]) -> None:
         await self.db.synth_api_calls.insert_one({

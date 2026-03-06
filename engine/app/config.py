@@ -73,6 +73,16 @@ class Settings:
             "MARKET_STRENGTH_COUNTER_TREND_MULTIPLIER", 1.5
         )
         self.market_strength_lookback_minutes: int = _get_int("MARKET_STRENGTH_LOOKBACK_MINUTES", 120)
+        # Profit optimization filters
+        self.min_expected_profit: float = _get_float("MIN_EXPECTED_PROFIT", 0.004)
+        self.min_volatility_width: float = _get_float("MIN_VOLATILITY_WIDTH", 0.003)
+        self.trading_fee_rate: float = _get_float("TRADING_FEE_RATE", 0.001)
+        # News analyzer
+        self.news_timezone: str = _get_str("NEWS_TIMEZONE", "America/New_York")
+        self.openai_api_key: str = _get_str("OPENAI_API_KEY")
+        # Strike tool
+        self.strike_symbols: str = _get_str("STRIKE_SYMBOLS", "BTC,ETH,XAU,SPY,NVDA,GOOGL,TSLA,AAPL")
+        self.strike_refresh_minutes: int = _get_int("STRIKE_REFRESH_MINUTES", 60)
 
     def parse_symbols(self) -> list[SymbolConfig]:
         parsed: list[SymbolConfig] = []

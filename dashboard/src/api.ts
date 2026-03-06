@@ -45,7 +45,33 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }).then((r) => r.json())
+    }).then((r) => r.json()),
+  newsToday: () =>
+    json<{
+      date: string;
+      timezone?: string;
+      created_at?: string;
+      summary: string;
+      sticky_notes: { title: string; text: string }[];
+      asset_bias: Record<string, string>;
+    }>("/news/today"),
+  newsRaw: (limit = 100) => json<any[]>(`/news/raw?limit=${limit}`),
+  newsRefresh: () =>
+    fetch(`${BASE}/news/refresh`, { method: "POST" }).then((r) => r.json()),
+  newsSummarize: () =>
+    fetch(`${BASE}/news/summarize`, { method: "POST" }).then((r) => r.json()),
+  strikeLatest: () =>
+    json<{
+      allocations: Record<
+        string,
+        { weight: number; confidence: number; bias: string; edge: number; uncertainty: number }
+      >;
+      timestamp: string | null;
+      horizon?: string;
+    }>("/strike/latest"),
+  strikeHistory: (limit = 50) => json<any[]>(`/strike/history?limit=${limit}`),
+  strikeRefresh: () =>
+    fetch(`${BASE}/strike/refresh`, { method: "POST" }).then((r) => r.json())
 };
 
 export function stream(onMessage: (msg: any) => void): () => void {

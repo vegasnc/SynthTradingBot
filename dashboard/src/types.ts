@@ -17,6 +17,7 @@ export interface Signal {
   reasons: string[];
   levels: Record<string, number>;
   flags: Record<string, boolean | string>;
+  trade_skipped_reason?: string;
 }
 
 export interface Position {
