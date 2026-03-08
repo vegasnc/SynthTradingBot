@@ -1,0 +1,27 @@
+body {
+  font-family: system-ui, sans-serif;
+  padding: 24px;
+  max-width: 480px;
+}
+h1 { font-size: 1.2rem; margin-bottom: 16px; }
+.field { margin-bottom: 16px; }
+.field label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.field input {
+  width: 100%;
+  padding: 8px 12px;
+  box-sizing: border-box;
+}
+button {
+  padding: 8px 16px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover { background: #1d4ed8; }
+#status { margin-top: 12px; color: #666; }

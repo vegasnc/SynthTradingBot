@@ -30,9 +30,7 @@ Copy `engine/.env.example` to `engine/.env` and set:
 - `BROKER_API_KEY_EQUITY`, `BROKER_API_SECRET_EQUITY`
 - `PAPER_TRADING=true`
 - `SYMBOLS=BTC-USD:crypto,ETH-USD:crypto,SPY:equity,AAPL:equity`
-- `FINNHUB_API_KEY` (optional, for equity candles; free at [finnhub.io](https://finnhub.io/register). If unset, equity data falls back to Yahoo.)
-
-**Market data flow:** The **dashboard** fetches realized prices from Binance (crypto) and pushes them to the engine via `POST /prices`. The backend does not fetch market data; it consumes only what the frontend provides. For equity symbols, set `VITE_FINNHUB_API_KEY` in the dashboard `.env` (optional).
+**Market data flow:** The **engine** fetches crypto prices (Binance/Kraken) server-side. Equity prices come from the dashboard via `POST /prices`. No Finnhub or equity API key required.
 `synth_api_endpoints.json` is loaded from repo root as required.
 
 ## 2) Run Engine

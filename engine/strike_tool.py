@@ -9,7 +9,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _synth_asset(symbol: str) -> str:
+# Kraken xStocks -> Synth API asset (Synth uses GOOGL, SPY, etc.; Kraken uses GOOGLX, SPYX, etc.)
+_XSTOCK_TO_SYNTH: dict[str, str] = {
+    "GOOGLX": "GOOGL", "SPYX": "SPY", "TSLAX": "TSLA", "NVDAX": "NVDA", "AAPLX": "AAPL",
+}
+
+
+def _synth_asset(symbol: str, synth_asset_map: dict[str, str] | None = None) -> str:
+    """Map trading symbol to Synth API asset. Uses SYNTH_ASSET_MAP when provided; fallback for xStocks."""
+    if synth_asset_map and symbol in synth_asset_map:
+        return synth_asset_map[symbol]
+    if symbol in _XSTOCK_TO_SYNTH:
+        return _XSTOCK_TO_SYNTH[symbol]
     if symbol.endswith("-USD"):
         return symbol.split("-")[0]
     return symbol
@@ -26,6 +37,7 @@ async def compute_strike_allocations(
     strike_symbols: list[str],
     max_weight_per_asset: float = 0.30,
     max_total_crypto: float = 0.60,
+    synth_asset_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Compute allocation weights for strike symbols using Synth 1h predictions.
@@ -35,7 +47,7 @@ async def compute_strike_allocations(
     raw_data: dict[str, dict] = {}
 
     for sym in strike_symbols:
-        asset = _synth_asset(sym)
+        asset = _synth_asset(sym, synth_asset_map)
         try:
             payload = await synth.get_prediction_percentiles(asset=asset, horizon="1h")
             pct = synth.parse_percentiles(payload)
@@ -141,16 +153,18 @@ async def run_strike_refresh(
     store,
     state,
     strike_symbols_str: str,
+    synth_asset_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run strike computation and store snapshot."""
     symbols = [s.strip() for s in strike_symbols_str.split(",") if s.strip()]
     if not symbols:
-        symbols = ["BTC", "ETH", "XAU", "SPY", "NVDA", "GOOGL", "TSLA", "AAPL"]
+        symbols = ["BTC", "ETH", "XAU", "GOOGLX", "SPYX", "TSLAX", "NVDAX", "AAPLX"]
 
     result = await compute_strike_allocations(
         synth, store, state, symbols,
         max_weight_per_asset=0.30,
         max_total_crypto=0.60,
+        synth_asset_map=synth_asset_map,
     )
     doc = {
         "timestamp": datetime.now(timezone.utc),

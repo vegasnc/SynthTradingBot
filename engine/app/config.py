@@ -54,7 +54,10 @@ class Settings:
         self.broker_api_key_equity: str = _get_str("BROKER_API_KEY_EQUITY")
         self.broker_api_secret_equity: str = _get_str("BROKER_API_SECRET_EQUITY")
         self.paper_trading: bool = _get_bool("PAPER_TRADING", True)
-        self.symbols: str = _get_str("SYMBOLS", "BTC-USD:crypto,ETH-USD:crypto")
+        # Use Kraken xStock symbols (GOOGLX, SPYX, etc.) so WS + Synth predictions align; Synth API uses GOOGL, SPY via SYNTH_ASSET_MAP
+        self.symbols: str = _get_str(
+            "SYMBOLS", "BTC:crypto,ETH:crypto,XAU:crypto,GOOGLX:equity,SPYX:equity,TSLAX:equity,NVDAX:equity,AAPLX:equity"
+        )
         self.engine_db_name: str = _get_str("ENGINE_DB_NAME", "trading_bot")
         self.synth_endpoints_file: str = _get_str("SYNTH_ENDPOINTS_FILE", "../synth_api_endpoints.json")
         self.engine_loop_seconds: int = _get_int("ENGINE_LOOP_SECONDS", 60)
@@ -65,7 +68,6 @@ class Settings:
         self.max_symbol_exposure: float = _get_float("MAX_SYMBOL_EXPOSURE", 0.2)
         self.max_portfolio_exposure: float = _get_float("MAX_PORTFOLIO_EXPOSURE", 0.7)
         self.paper_slippage_bps: float = _get_float("PAPER_SLIPPAGE_BPS", 5.0)
-        self.finnhub_api_key: str = _get_str("FINNHUB_API_KEY")
         self.synth_refresh_minutes: int = _get_int("SYNTH_REFRESH_MINUTES", 10)
         self.synth_price_change_refresh_pct: float = _get_float("SYNTH_PRICE_CHANGE_REFRESH_PCT", 0.3)
         self.synth_price_change_period_minutes: int = _get_int("SYNTH_PRICE_CHANGE_PERIOD_MINUTES", 2)
@@ -80,9 +82,15 @@ class Settings:
         # News analyzer
         self.news_timezone: str = _get_str("NEWS_TIMEZONE", "America/New_York")
         self.openai_api_key: str = _get_str("OPENAI_API_KEY")
-        # Strike tool
-        self.strike_symbols: str = _get_str("STRIKE_SYMBOLS", "BTC,ETH,XAU,SPY,NVDA,GOOGL,TSLA,AAPL")
+        # Strike tool (xStocks = Kraken symbols GOOGLX, SPYX, etc.; Synth API uses GOOGL, SPY, etc.)
+        self.strike_symbols: str = _get_str(
+            "STRIKE_SYMBOLS", "BTC,ETH,XAU,GOOGLX,SPYX,TSLAX,NVDAX,AAPLX"
+        )
         self.strike_refresh_minutes: int = _get_int("STRIKE_REFRESH_MINUTES", 60)
+        # Maps trading symbol (e.g. GOOGLX) -> Synth API asset (e.g. GOOGL). Required for xStocks predictions + strike.
+        self.synth_asset_map: str = _get_str(
+            "SYNTH_ASSET_MAP", "GOOGLX:GOOGL,SPYX:SPY,TSLAX:TSLA,NVDAX:NVDA,AAPLX:AAPL"
+        )
 
     def parse_symbols(self) -> list[SymbolConfig]:
         parsed: list[SymbolConfig] = []
@@ -98,6 +106,16 @@ class Settings:
                 market_type = "crypto" if "-" in clean else "equity"
             parsed.append(SymbolConfig(symbol=symbol.strip().upper(), market_type=market_type))
         return parsed
+
+    def parse_synth_asset_map(self) -> dict[str, str]:
+        """Parse SYNTH_ASSET_MAP (trading_symbol -> synth_asset). Example: SPY:SPYX,AAPL:AAPLX"""
+        out: dict[str, str] = {}
+        for part in self.synth_asset_map.split(","):
+            part = part.strip()
+            if ":" in part:
+                trading, synth = part.split(":", 1)
+                out[trading.strip().upper()] = synth.strip().upper()
+        return out
 
     def synth_file_path(self) -> Path:
         p = Path(self.synth_endpoints_file)

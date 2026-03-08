@@ -22,12 +22,30 @@ from .strategy import (
 )
 from .market_data import fetch_spot_prices
 from .synth_client import SynthClient
-from .utils import as_utc, floor_to_minute, is_equity_tradable_now, utc_now
+from .utils import (
+    as_utc,
+    floor_to_minute,
+    is_equity_tradable_now,
+    is_moc_submission_window,
+    is_moo_submission_window,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def synth_asset_for_symbol(symbol: str) -> str:
+# Kraken xStocks -> Synth API asset (Synth uses GOOGL, SPY, etc.)
+_XSTOCK_TO_SYNTH: dict[str, str] = {
+    "GOOGLX": "GOOGL", "SPYX": "SPY", "TSLAX": "TSLA", "NVDAX": "NVDA", "AAPLX": "AAPL",
+}
+
+
+def synth_asset_for_symbol(symbol: str, synth_asset_map: dict[str, str] | None = None) -> str:
+    """Map trading symbol to Synth API asset. Uses SYNTH_ASSET_MAP when provided; fallback for xStocks."""
+    if synth_asset_map and symbol in synth_asset_map:
+        return synth_asset_map[symbol]
+    if symbol in _XSTOCK_TO_SYNTH:
+        return _XSTOCK_TO_SYNTH[symbol]
     if symbol.endswith("-USD"):
         return symbol.split("-")[0]
     return symbol
@@ -59,13 +77,18 @@ class EngineScheduler:
         self.synth_price_change_period_minutes = synth_price_change_period_minutes
         self.market_strength_counter_trend_multiplier = market_strength_counter_trend_multiplier
         self.market_strength_lookback_minutes = market_strength_lookback_minutes
+        self._synth_asset_map = settings.parse_synth_asset_map()
         self._running = False
+        self._moo_queue: list[dict[str, Any]] = []
+        self._moo_submitted_today: set[str] = set()
+        self._moc_submitted_ids: set[str] = set()
 
     async def run_forever(self) -> None:
         self._running = True
         monitor_task = asyncio.create_task(self._position_monitor_loop())
         news_task = asyncio.create_task(self._daily_news_loop())
         strike_task = asyncio.create_task(self._strike_refresh_loop())
+        moo_moc_task = asyncio.create_task(self._equity_moo_moc_loop())
         try:
             while self._running:
                 try:
@@ -78,11 +101,151 @@ class EngineScheduler:
             monitor_task.cancel()
             news_task.cancel()
             strike_task.cancel()
-            for t in (monitor_task, news_task, strike_task):
+            moo_moc_task.cancel()
+            for t in (monitor_task, news_task, strike_task, moo_moc_task):
                 try:
                     await t
                 except asyncio.CancelledError:
                     pass
+
+    async def _equity_moo_moc_loop(self) -> None:
+        """MOO/MOC: pre-market queue MOO, ~9:25 submit MOO, ~15:45 submit MOC for open equity."""
+        from .utils import _et_now
+
+        while self._running:
+            await asyncio.sleep(60)
+            if not self._running or not self.state.trading_enabled:
+                continue
+            try:
+                now = utc_now()
+                et = _et_now(now)
+                if et.weekday() >= 5:
+                    self._moo_queue.clear()
+                    self._moo_submitted_today.clear()
+                    continue
+
+                # Reset daily MOO submitted set at start of session
+                if et.hour == 9 and et.minute == 30:
+                    self._moo_submitted_today.clear()
+
+                # Pre-market: evaluate equity signals, enqueue MOO
+                if is_moo_submission_window(now):
+                    equity_cfgs = [c for c in self.state.symbols if c.market_type == "equity"]
+                    for cfg in equity_cfgs:
+                        symbol = cfg.symbol
+                        mkt = self.state.latest_market_data.get(symbol)
+                        spot = float(mkt.get("spot", 0) or 0) if mkt else 0
+                        if spot <= 0:
+                            continue
+                        if symbol in self._moo_submitted_today:
+                            continue
+                        pred = await self._ensure_prediction(cfg, spot, [])
+                        if not pred:
+                            continue
+                        pct = pred.get("percentiles", {})
+                        decision = build_decision_with_market_strength(
+                            spot=spot,
+                            pct=self.synth.parse_percentiles({"percentiles": pct}),
+                            market_type="equity",
+                            counter_trend_multiplier=self.market_strength_counter_trend_multiplier,
+                        )
+                        if not decision.allowed_to_trade:
+                            continue
+                        open_pos = await self._open_position_for_symbol(symbol)
+                        if open_pos:
+                            continue
+                        qty = compute_position_size(
+                            account_equity=self.state.account_equity,
+                            risk_pct=self.state.equity_risk_pct,
+                            entry_price=decision.entry,
+                            stop_price=decision.stop,
+                            max_symbol_exposure=self.state.max_symbol_exposure,
+                        )
+                        if qty <= 0:
+                            continue
+                        self._moo_queue.append({
+                            "symbol": symbol,
+                            "side": "buy" if decision.bias == "long" else "sell",
+                            "qty": qty,
+                            "entry_price": decision.entry,
+                            "market_type": "equity",
+                            "levels": {"stop": decision.stop, "tp1": decision.tp1, "tp2": decision.tp2},
+                        })
+
+                # ~9:25-9:30: submit MOO orders
+                if et.hour == 9 and 25 <= et.minute < 30:
+                    for item in self._moo_queue:
+                        symbol = item["symbol"]
+                        if symbol in self._moo_submitted_today:
+                            continue
+                        try:
+                            order = await self.broker.place_order(
+                                symbol, item["side"], item["qty"], item["entry_price"],
+                                "equity", time_in_force="opg"
+                            )
+                            self._moo_submitted_today.add(symbol)
+                            if order.status == "filled":
+                                pos = {
+                                    "position_id": order.client_order_id,
+                                    "symbol": symbol,
+                                    "market_type": "equity",
+                                    "side": "long" if item["side"] == "buy" else "short",
+                                    "qty": item["qty"],
+                                    "original_qty": item["qty"],
+                                    "entry_price": order.fill_price,
+                                    "stop_price": item["levels"]["stop"],
+                                    "tp1": item["levels"]["tp1"],
+                                    "tp2": item["levels"]["tp2"],
+                                    "tp": (item["levels"]["tp1"] + item["levels"]["tp2"]) / 2,
+                                    "status": "open",
+                                    "opened_at": utc_now(),
+                                    "closed_at": None,
+                                    "realized_pnl": 0.0,
+                                    "tp1_closed": False,
+                                    "metadata": {},
+                                }
+                                await self.store.db.positions.insert_one(pos)
+                                self.state.push_update("position_opened", pos)
+                                logger.info("MOO filled for %s %s at %.2f", symbol, item["side"], order.fill_price)
+                        except Exception as e:
+                            logger.exception("MOO submit failed for %s: %s", symbol, e)
+                    self._moo_queue.clear()
+
+                # ~15:40-15:50: submit MOC for open equity positions (once per position)
+                if 15 <= et.hour and et.minute >= 40 and et.minute < 50:
+                    cursor = self.store.db.positions.find({"status": "open", "market_type": "equity"})
+                    for pos in await cursor.to_list(length=50):
+                        pos_id = str(pos["_id"])
+                        if pos_id in self._moc_submitted_ids:
+                            continue
+                        symbol = pos["symbol"]
+                        side = pos["side"]
+                        qty = float(pos["qty"])
+                        spot = float(self.state.latest_price.get(symbol, 0) or pos["entry_price"])
+                        try:
+                            close_side = "sell" if side == "long" else "buy"
+                            order = await self.broker.place_order(
+                                symbol, close_side, qty, spot, "equity", time_in_force="cls"
+                            )
+                            self._moc_submitted_ids.add(pos_id)
+                            if order.status == "filled":
+                                pnl = ((order.fill_price - pos["entry_price"]) if side == "long"
+                                       else (pos["entry_price"] - order.fill_price)) * qty
+                                await self.store.db.positions.update_one(
+                                    {"_id": pos["_id"]},
+                                    {
+                                        "$set": {"status": "closed", "closed_at": utc_now()},
+                                        "$inc": {"realized_pnl": pnl},
+                                    },
+                                )
+                                logger.info("MOC closed %s %s: pnl=%.2f", symbol, side, pnl)
+                                self.state.push_update("position_closed", {"symbol": symbol, "pnl": pnl, "reason": "moc"})
+                        except Exception as e:
+                            logger.exception("MOC submit failed for %s: %s", symbol, e)
+                elif et.hour >= 16 or et.hour < 15:
+                    self._moc_submitted_ids.clear()
+            except Exception as exc:
+                logger.exception("equity MOO/MOC loop failed: %s", exc)
 
     async def _daily_news_loop(self) -> None:
         """Run daily news analysis at 00:05 in NEWS_TIMEZONE."""
@@ -126,6 +289,7 @@ class EngineScheduler:
                     self.store,
                     self.state,
                     self.settings.strike_symbols,
+                    synth_asset_map=self._synth_asset_map,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("strike refresh failed: %s", exc)
@@ -321,7 +485,7 @@ class EngineScheduler:
             if not force_refresh and latest.get("next_refresh_at") and as_utc(latest["next_refresh_at"]) > now:
                 return latest
 
-        asset = synth_asset_for_symbol(symbol)
+        asset = synth_asset_for_symbol(symbol, self._synth_asset_map)
         payload = await self.synth.get_prediction_percentiles(asset=asset, horizon="1h")
         pct = self.synth.parse_percentiles(payload)
         range_ = pct.p95 - pct.p05
@@ -415,7 +579,7 @@ class EngineScheduler:
         # Optional liquidation-aware adjustment for crypto: move stop 0.3% outside nearest high-probability band and reduce size.
         size_scale = 1.0
         if cfg.market_type == "crypto":
-            liq = await self.synth.get_liquidation_insight(synth_asset_for_symbol(symbol), horizon="1h")
+            liq = await self.synth.get_liquidation_insight(synth_asset_for_symbol(symbol, self._synth_asset_map), horizon="1h")
             adjusted = self._adjust_stop_from_liquidation(stop_price, liq, signal["bias"])
             if adjusted is not None:
                 stop_price = adjusted
@@ -470,6 +634,7 @@ class EngineScheduler:
             "market_type": cfg.market_type,
             "side": signal["bias"],
             "qty": qty,
+            "original_qty": qty,
             "entry_price": order.fill_price,
             "stop_price": stop_price,
             "tp": float(levels.get("tp", (float(levels.get("tp1", entry_price)) + float(levels.get("tp2", entry_price))) / 2)),
@@ -480,6 +645,7 @@ class EngineScheduler:
             "closed_at": None,
             "realized_pnl": 0.0,
             "cooldown_until": None,
+            "tp1_closed": False,
             "metadata": {"signal": signal},
         }
         await self.store.db.positions.insert_one(pos)
@@ -495,36 +661,65 @@ class EngineScheduler:
         for pos in open_positions:
             side = pos["side"]
             qty = float(pos["qty"])
-            tp = float(pos.get("tp") or pos.get("tp1") or pos.get("tp2") or pos["entry_price"])
+            tp1 = pos.get("tp1")
+            tp2 = pos.get("tp2")
+            tp1_val = float(tp1) if tp1 is not None else None
+            tp2_val = float(tp2) if tp2 is not None else None
+            tp = float(pos.get("tp") or tp1_val or tp2_val or pos["entry_price"])
             stop = float(pos.get("stop_price") or 0)
+            tp1_closed = pos.get("tp1_closed", False)
 
-            hit_tp = (side == "long" and spot >= tp) or (side == "short" and spot <= tp)
+            hit_tp1 = (
+                (tp1_val is not None and side == "long" and (spot >= tp1_val or candle_high >= tp1_val))
+                or (tp1_val is not None and side == "short" and (spot <= tp1_val or candle_low <= tp1_val))
+            )
+            hit_tp2 = (
+                (tp2_val is not None and side == "long" and (spot >= tp2_val or candle_high >= tp2_val))
+                or (tp2_val is not None and side == "short" and (spot <= tp2_val or candle_low <= tp2_val))
+            )
             hit_stop_long = side == "long" and (spot <= stop or candle_low <= stop)
             hit_stop_short = side == "short" and (spot >= stop or candle_high >= stop)
             hit_stop = hit_stop_long or hit_stop_short
 
-            if hit_tp and pos.get("status") == "open":
-                pos_cur = await self.store.db.positions.find_one({"_id": pos["_id"]})
-                if pos_cur and pos_cur.get("status") == "open":
-                    close_qty = float(pos_cur["qty"])
-                    pnl = ((spot - pos_cur["entry_price"]) if side == "long" else (pos_cur["entry_price"] - spot)) * close_qty
+            pos_cur = await self.store.db.positions.find_one({"_id": pos["_id"]})
+            if not pos_cur or pos_cur.get("status") != "open":
+                continue
+            cur_qty = float(pos_cur["qty"])
+            entry = float(pos_cur["entry_price"])
+
+            if hit_tp2:
+                close_qty = cur_qty
+                pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
+                await self.store.db.positions.update_one(
+                    {"_id": pos["_id"]},
+                    {
+                        "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": None},
+                        "$inc": {"realized_pnl": pnl},
+                    },
+                )
+                logger.info("TP2 hit - closed %s %s: spot=%.2f tp2=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, spot, tp2_val or tp, close_qty, pnl)
+                self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl, "reason": "tp2"})
+                continue
+
+            if hit_tp1 and not pos_cur.get("tp1_closed", False):
+                close_qty = cur_qty * 0.5
+                if close_qty > 0:
+                    pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
+                    new_qty = cur_qty - close_qty
                     await self.store.db.positions.update_one(
                         {"_id": pos["_id"]},
                         {
-                            "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": None},
+                            "$set": {"qty": new_qty, "tp1_closed": True},
                             "$inc": {"realized_pnl": pnl},
                         },
                     )
-                    logger.info("TP hit - closed %s %s: spot=%.2f tp=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, spot, tp, close_qty, pnl)
-                    self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl, "reason": "tp"})
-                    continue
-
-            pos_cur = await self.store.db.positions.find_one({"_id": pos["_id"]})
-            if not pos_cur:
+                    logger.info("TP1 hit - closed 50%% %s %s: spot=%.2f tp1=%.2f close_qty=%.4f pnl=%.2f remaining_qty=%.4f", cfg.symbol, side, spot, tp1_val or tp, close_qty, pnl, new_qty)
+                    self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl, "reason": "tp1_partial", "remaining_qty": new_qty})
                 continue
+
             if hit_stop:
-                close_qty = pos_cur["qty"]
-                pnl = ((spot - pos_cur["entry_price"]) if side == "long" else (pos_cur["entry_price"] - spot)) * close_qty
+                close_qty = cur_qty
+                pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
                 await self.store.db.positions.update_one(
                     {"_id": pos_cur["_id"]},
                     {
@@ -532,7 +727,7 @@ class EngineScheduler:
                         "$inc": {"realized_pnl": pnl},
                     },
                 )
-                logger.info("closed %s %s: hit_stop=%s spot=%.2f stop=%.2f pnl=%.2f", cfg.symbol, side, hit_stop, spot, stop, pnl)
+                logger.info("closed %s %s: hit_stop=%s spot=%.2f stop=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, hit_stop, spot, stop, close_qty, pnl)
                 self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": hit_stop, "pnl": pnl})
 
     async def _within_portfolio_exposure(self, symbol: str, entry_price: float, qty: float) -> bool:

@@ -23,6 +23,9 @@ class BrokerOrder:
     reason: str = ""
 
 
+TimeInForce = Literal["day", "gtc", "opg", "cls"]
+
+
 class BrokerInterface(ABC):
     @abstractmethod
     async def place_order(
@@ -33,6 +36,7 @@ class BrokerInterface(ABC):
         mid_price: float,
         market_type: MarketType,
         client_order_id: str | None = None,
+        time_in_force: TimeInForce | str | None = None,
     ) -> BrokerOrder:
         raise NotImplementedError
 
@@ -63,6 +67,7 @@ class PaperBroker(BrokerInterface):
         mid_price: float,
         market_type: MarketType,
         client_order_id: str | None = None,
+        time_in_force: TimeInForce | str | None = None,
     ) -> BrokerOrder:
         coid = client_order_id or str(uuid4())
         if qty <= 0:

@@ -26,6 +26,42 @@ from .state import EngineState
 from .synth_client import SynthClient
 from .utils import as_utc, utc_now
 from .ws_manager import WSManager
+from .kraken_ws import run_kraken_ws
+
+
+# Legacy Synth asset -> Kraken xStock (so popup/strike always get allocations under xStock keys)
+_STRIKE_LEGACY_TO_XSTOCK: dict[str, str] = {
+    "GOOGL": "GOOGLX", "SPY": "SPYX", "NVDA": "NVDAX", "TSLA": "TSLAX", "AAPL": "AAPLX",
+}
+
+
+def _normalize_strike_allocations(allocations: dict[str, Any]) -> dict[str, Any]:
+    """Ensure strike allocations include xStock keys so the spot/strike panel finds funds for GOOGLX, SPYX, etc."""
+    out = dict(allocations)
+    for legacy, xstock in _STRIKE_LEGACY_TO_XSTOCK.items():
+        if legacy in out and xstock not in out:
+            out[xstock] = out[legacy]
+    return out
+
+
+def _spot_for_symbol(state: EngineState, symbol: str) -> float | None:
+    """Resolve current spot for a symbol from state (latest_price, latest_market_data, alternates)."""
+    if not symbol:
+        return None
+    spot = state.latest_price.get(symbol)
+    if spot is not None and float(spot) > 0:
+        return float(spot)
+    mkt = state.latest_market_data.get(symbol)
+    if mkt and mkt.get("spot") is not None and float(mkt["spot"]) > 0:
+        return float(mkt["spot"])
+    alt = f"{symbol}-USD" if "-" not in symbol else symbol.replace("-USD", "")
+    spot = state.latest_price.get(alt)
+    if spot is not None and float(spot) > 0:
+        return float(spot)
+    mkt = state.latest_market_data.get(alt)
+    if mkt and mkt.get("spot") is not None and float(mkt["spot"]) > 0:
+        return float(mkt["spot"])
+    return None
 
 
 def _mongo_to_json(obj: Any) -> Any:
@@ -92,14 +128,15 @@ def build_app() -> Starlette:
     ws_manager = WSManager(state)
 
     async def _market_data_loop() -> None:
-        """Fetch full crypto market data (candles) every 5s."""
+        """Fetch full crypto and equity market data (candles) every 5s."""
         log = logging.getLogger("app.api")
         async with httpx.AsyncClient() as client:
             while True:
                 try:
                     prices = await fetch_crypto_prices(client, state.symbols)
-                    if prices:
-                        for sym, data in prices.items():
+                    merged = prices
+                    if merged:
+                        for sym, data in merged.items():
                             state.latest_market_data[sym] = data
                         state.last_market_data_success_at = utc_now()
                         state.last_market_data_error = None
@@ -111,29 +148,30 @@ def build_app() -> Starlette:
                 await asyncio.sleep(5)
 
     async def _spot_price_loop() -> None:
-        """Fetch spot prices every 1s for real-time TP/stop detection."""
+        """Fetch spot prices every 1s for real-time TP/stop detection (crypto + equity)."""
         log = logging.getLogger("app.api")
         from .config import SymbolConfig
         async with httpx.AsyncClient() as client:
             while True:
                 try:
-                    # Include symbols with open positions (in case config changed)
                     config_symbols = list(state.symbols)
                     try:
-                        pos_cursor = store.db.positions.find({"status": "open"}, {"symbol": 1})
-                        pos_symbols = {p["symbol"] for p in await pos_cursor.to_list(200)}
-                        for s in pos_symbols:
+                        pos_cursor = store.db.positions.find({"status": "open"}, {"symbol": 1, "market_type": 1})
+                        for p in await pos_cursor.to_list(200):
+                            s = p["symbol"]
                             if s not in (c.symbol for c in config_symbols):
-                                config_symbols.append(SymbolConfig(symbol=s, market_type="crypto"))
+                                mkt = p.get("market_type") or "crypto"
+                                config_symbols.append(SymbolConfig(symbol=s, market_type=mkt))
                     except Exception:
                         pass
                     spots = await fetch_spot_prices(client, config_symbols)
                     for sym, spot in spots.items():
                         existing = state.latest_market_data.get(sym)
+                        mkt = next((c.market_type for c in config_symbols if c.symbol == sym), "crypto")
                         if existing:
                             state.latest_market_data[sym] = {**existing, "spot": spot, "received_at": utc_now()}
                         else:
-                            state.latest_market_data[sym] = {"spot": spot, "received_at": utc_now(), "market_type": "crypto", "candles_1m": [], "candles_5m": []}
+                            state.latest_market_data[sym] = {"spot": spot, "received_at": utc_now(), "market_type": mkt, "candles_1m": [], "candles_5m": []}
                 except Exception as e:
                     log.debug("spot price fetch failed: %s", e)
                 await asyncio.sleep(1)
@@ -145,11 +183,13 @@ def build_app() -> Starlette:
         ws_task = asyncio.create_task(_ws_pump(ws_manager))
         market_task = asyncio.create_task(_market_data_loop())
         spot_task = asyncio.create_task(_spot_price_loop())
+        kraken_ws_task = run_kraken_ws(state)
         yield
         scheduler_task.cancel()
         ws_task.cancel()
         market_task.cancel()
         spot_task.cancel()
+        kraken_ws_task.cancel()
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({
@@ -197,7 +237,7 @@ def build_app() -> Starlette:
                 state.last_market_data_success_at.isoformat()
                 if state.last_market_data_success_at else None
             ),
-            "hint": "Crypto: server-side Binance/Kraken. Equity: needs dashboard POST /prices.",
+            "hint": "Crypto: Binance/Kraken. Equity: Yahoo Finance (auto-fetched).",
         })
 
     async def get_predictions(request: Request) -> JSONResponse:
@@ -242,13 +282,15 @@ def build_app() -> Starlette:
             hist_q["closed_at"] = {"$gte": cutoff}
         hist_cursor = store.db.positions.find(hist_q).sort("closed_at", -1).limit(500)
         history = await hist_cursor.to_list(length=500)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         all_closed = await store.db.positions.find({"status": "closed"}).sort("closed_at", -1).to_list(length=10000)
-        today_pnl = sum(float(p.get("realized_pnl", 0)) for p in all_closed if as_utc(p.get("closed_at")) >= today_start)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_closed = [p for p in all_closed if as_utc(p.get("closed_at")) >= today_start]
+        today_pnl = sum(float(p.get("realized_pnl", 0)) for p in today_closed)
         total_pnl = sum(float(p.get("realized_pnl", 0)) for p in all_closed)
         pnls = [float(p.get("realized_pnl", 0)) for p in all_closed]
         wins = [x for x in pnls if x > 0]
         losses = [x for x in pnls if x < 0]
+        today_trades = len(today_closed)
         win_rate = (len(wins) / len(pnls) * 100) if pnls else 0.0
         avg_win = (sum(wins) / len(wins)) if wins else 0.0
         avg_loss = (sum(losses) / len(losses)) if losses else 0.0
@@ -269,12 +311,15 @@ def build_app() -> Starlette:
                 alt = f"{sym}-USD" if "-" not in sym else sym.replace("-USD", "")
                 if alt in spot_by_symbol:
                     spot_by_symbol[sym] = spot_by_symbol[alt]
+        open_positions_cost = sum(float(p.get("entry_price", 0)) * float(p.get("qty", 0)) for p in open_list)
         return JSONResponse(_mongo_to_json({
             "open": open_list, "history": history,
             "today_pnl": today_pnl, "total_pnl": total_pnl, "win_rate": win_rate, "total_trades": len(all_closed),
+            "today_trades": today_trades, "wins_count": len(wins), "losses_count": len(losses),
             "avg_win": avg_win, "avg_loss": avg_loss, "largest_win": largest_win, "largest_loss": largest_loss,
             "profit_factor": profit_factor,
             "spot_by_symbol": spot_by_symbol,
+            "open_positions_cost": open_positions_cost,
         }))
 
     async def get_orders(request: Request) -> JSONResponse:
@@ -400,12 +445,64 @@ def build_app() -> Starlette:
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+    async def get_popup(_: Request) -> JSONResponse:
+        """Lightweight endpoint for extension popup: stats, spot prices, strike in one call."""
+        all_closed = await store.db.positions.find({"status": "closed"}).sort("closed_at", -1).to_list(length=10000)
+        open_list = await store.db.positions.find({"status": "open"}).sort("opened_at", -1).limit(200).to_list(length=200)
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_closed = [p for p in all_closed if as_utc(p.get("closed_at")) >= today_start]
+        today_pnl = sum(float(p.get("realized_pnl", 0)) for p in today_closed)
+        total_pnl = sum(float(p.get("realized_pnl", 0)) for p in all_closed)
+        pnls = [float(p.get("realized_pnl", 0)) for p in all_closed]
+        wins = [x for x in pnls if x > 0]
+        losses = [x for x in pnls if x < 0]
+        spot_by_symbol = dict(state.latest_price)
+        for sym, mkt in state.latest_market_data.items():
+            if mkt and mkt.get("spot") is not None and float(mkt.get("spot", 0)) > 0:
+                spot_by_symbol[sym] = float(mkt["spot"])
+        for p in open_list:
+            sym = p.get("symbol")
+            if sym and sym not in spot_by_symbol:
+                alt = f"{sym}-USD" if "-" not in sym else sym.replace("-USD", "")
+                if alt in spot_by_symbol:
+                    spot_by_symbol[sym] = spot_by_symbol[alt]
+        for legacy, xstock in _STRIKE_LEGACY_TO_XSTOCK.items():
+            if legacy in spot_by_symbol and xstock not in spot_by_symbol:
+                spot_by_symbol[xstock] = spot_by_symbol[legacy]
+            if f"{legacy}-USD" in spot_by_symbol and xstock not in spot_by_symbol:
+                spot_by_symbol[xstock] = spot_by_symbol[f"{legacy}-USD"]
+        closed_list = all_closed[:100]
+        strike_doc = await store.db.strike_snapshots.find_one({}, sort=[("timestamp", -1)])
+        strike_alloc_raw = strike_doc.get("allocations", {}) if strike_doc else {}
+        strike_alloc = _normalize_strike_allocations(strike_alloc_raw)
+        open_positions_cost = sum(float(p.get("entry_price", 0)) * float(p.get("qty", 0)) for p in open_list)
+        return JSONResponse(_mongo_to_json({
+            "ok": True,
+            "stats": {
+                "today_pnl": today_pnl,
+                "total_pnl": total_pnl,
+                "win_rate": (len(wins) / len(pnls) * 100) if pnls else 0.0,
+                "today_trades": len(today_closed),
+                "total_trades": len(all_closed),
+                "wins_count": len(wins),
+                "losses_count": len(losses),
+                "open_positions_cost": open_positions_cost,
+            },
+            "spot_by_symbol": spot_by_symbol,
+            "strike": {"allocations": strike_alloc},
+            "open_positions": open_list,
+            "closed_positions": closed_list,
+        }))
+
     async def get_strike_latest(_: Request) -> JSONResponse:
         doc = await store.db.strike_snapshots.find_one({}, sort=[("timestamp", -1)])
         if not doc:
             return JSONResponse({"allocations": {}, "timestamp": None})
+        alloc_raw = doc.get("allocations", {})
+        allocations = _normalize_strike_allocations(alloc_raw)
         return JSONResponse(_mongo_to_json({
-            "allocations": doc.get("allocations", {}),
+            "allocations": allocations,
             "timestamp": doc.get("timestamp"),
             "horizon": doc.get("horizon"),
         }))
@@ -421,8 +518,12 @@ def build_app() -> Starlette:
             from strike_tool import run_strike_refresh
             result = await run_strike_refresh(
                 synth, store, state, settings.strike_symbols,
+                synth_asset_map=settings.parse_synth_asset_map(),
             )
-            return JSONResponse(_mongo_to_json({"ok": True, "allocations": result.get("allocations", {})}))
+            return JSONResponse(_mongo_to_json({
+                "ok": True,
+                "allocations": _normalize_strike_allocations(result.get("allocations", {})),
+            }))
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -448,6 +549,35 @@ def build_app() -> Starlette:
                 {"symbol": str(req["close_position_symbol"]).upper(), "status": "open"},
                 {"$set": {"status": "closed", "closed_at": utc_now()}},
             )
+        if req.get("close_position_id"):
+            from bson import ObjectId
+            try:
+                oid = ObjectId(str(req["close_position_id"]))
+            except Exception:
+                return JSONResponse({"detail": "Invalid close_position_id"}, status_code=400)
+            pos = await store.db.positions.find_one({"_id": oid, "status": "open"})
+            if pos:
+                sym = pos.get("symbol") or ""
+                # Manual close: use current spot price for PnL (from Kraken WS / latest market data).
+                spot_val = _spot_for_symbol(state, sym)
+                if spot_val is None or spot_val <= 0:
+                    return JSONResponse(
+                        {
+                            "detail": f"Current price not available for {sym}. Ensure market data is connected and try again.",
+                            "code": "NO_SPOT_PRICE",
+                        },
+                        status_code=400,
+                    )
+                spot = float(spot_val)
+                entry = float(pos.get("entry_price", 0))
+                side = pos.get("side", "long")
+                qty = float(pos.get("qty", 0))
+                # PnL at current spot: long = (spot - entry) * qty, short = (entry - spot) * qty.
+                pnl = (spot - entry) * qty if side == "long" else (entry - spot) * qty
+                await store.db.positions.update_one(
+                    {"_id": oid},
+                    {"$set": {"status": "closed", "closed_at": utc_now()}, "$inc": {"realized_pnl": pnl}},
+                )
         if req.get("risk_pct_crypto") is not None:
             state.crypto_risk_pct = float(req["risk_pct_crypto"])
         if req.get("risk_pct_equity") is not None:
@@ -464,6 +594,7 @@ def build_app() -> Starlette:
 
     routes = [
         Route("/health", health),
+        Route("/popup", get_popup),
         Route("/status", get_status),
         Route("/symbols", get_symbols),
         Route("/state", get_state),

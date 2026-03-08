@@ -21,11 +21,11 @@ const REFRESH_OPTIONS: { label: string; ms: number }[] = [
   { label: "1 year", ms: 31_536_000_000 },
 ];
 
-function formatEST(ts: string): string {
+function formatLocal(ts: string): string {
   try {
     const s = String(ts).trim();
     const asUTC = s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(/\.\d+$/, "") + "Z";
-    return new Date(asUTC).toLocaleString("en-US", { timeZone: "America/New_York" });
+    return new Date(asUTC).toLocaleString();
   } catch {
     return ts;
   }
@@ -82,6 +82,7 @@ export default function App() {
   }>({ open: [], history: [] });
   const [orders, setOrders] = useState<any[]>([]);
   const [tradesPeriod, setTradesPeriod] = useState("day");
+  const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
   const [synthCalls, setSynthCalls] = useState<{ ts: string; api: string; params: Record<string, unknown> }[]>([]);
   const [predictions, setPredictions] = useState<any[]>([]);
   const [candles1m, setCandles1m] = useState<any[]>([]);
@@ -392,10 +393,16 @@ export default function App() {
                     <th>TP</th>
                     <th>Status</th>
                     <th>PnL</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[...positions.open, ...positions.history].map((p, idx) => {
+                  {positions.open.length + positions.history.length === 0 ? (
+                    <tr className="table-empty-row">
+                      <td colSpan={11}>No data</td>
+                    </tr>
+                  ) : (
+                  [...positions.open, ...positions.history].map((p, idx) => {
                     const isOpen = p.status === "open";
                     const spot = positions.spot_by_symbol?.[p.symbol];
                     const unrealized =
@@ -405,10 +412,32 @@ export default function App() {
                         : null;
                     const displayPnl = isOpen && unrealized != null ? unrealized : Number(p.realized_pnl ?? 0);
                     const pnlLabel = isOpen && unrealized != null ? "unreal." : "realized";
+                    const posId = (p as any)._id;
+                    const isClosing = posId && closingPositionId === posId;
+                    const handleClose = async () => {
+                      if (!posId || isClosing) return;
+                      setClosingPositionId(posId);
+                      try {
+                        const data = await api.controls({ close_position_id: posId });
+                        if (data && (data as { ok?: boolean }).ok) {
+                          setPositions(await api.positions(tradesPeriod));
+                        } else {
+                          alert((data as { detail?: string })?.detail || "Close failed. Ensure market data is connected and try again.");
+                        }
+                      } catch (e) {
+                        console.error("Close position failed:", e);
+                        alert("Close position failed.");
+                      } finally {
+                        setClosingPositionId(null);
+                      }
+                    };
                     return (
-                      <tr key={p.position_id ?? (p as any)._id ?? idx}>
+                      <tr
+                        key={p.position_id ?? posId ?? idx}
+                        className={displayPnl >= 0 ? "row-pnl-pos" : "row-pnl-neg"}
+                      >
                         <td>{idx + 1}</td>
-                        <td>{p.opened_at ? formatEST(p.opened_at) : "--"}</td>
+                        <td>{p.opened_at ? formatLocal(p.opened_at) : "--"}</td>
                         <td>{p.symbol}</td>
                         <td>{p.side}</td>
                         <td>{Number(p.qty).toFixed(4)}</td>
@@ -422,9 +451,25 @@ export default function App() {
                             <span className="pnl-sublabel"> (u)</span>
                           )}
                         </td>
+                        <td>
+                          {isOpen && posId ? (
+                            <button
+                              type="button"
+                              className="btn-close-position"
+                              onClick={handleClose}
+                              disabled={isClosing}
+                              title="Close this position"
+                            >
+                              {isClosing ? "Closing…" : "Close"}
+                            </button>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     );
-                  })}
+                  })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -443,17 +488,23 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o, idx) => (
+                  {orders.length === 0 ? (
+                    <tr className="table-empty-row">
+                      <td colSpan={7}>No data</td>
+                    </tr>
+                  ) : (
+                  orders.map((o, idx) => (
                     <tr key={(o as any).order_id ?? (o as any)._id ?? idx}>
                       <td>{idx + 1}</td>
-                      <td>{(o as any).created_at ? formatEST((o as any).created_at) : "--"}</td>
+                      <td>{(o as any).created_at ? formatLocal((o as any).created_at) : "--"}</td>
                       <td>{(o as any).symbol}</td>
                       <td>{(o as any).side}</td>
                       <td>{Number((o as any).qty).toFixed(4)}</td>
                       <td>{Number((o as any).price ?? (o as any).fill_price ?? 0).toFixed(2)}</td>
                       <td>{(o as any).status}</td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -483,10 +534,18 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {signalsToShow.map((s, idx) => (
-                    <tr key={idx}>
+                  {signalsToShow.length === 0 ? (
+                    <tr className="table-empty-row">
+                      <td colSpan={15}>No data</td>
+                    </tr>
+                  ) : (
+                  signalsToShow.map((s, idx) => (
+                    <tr
+                      key={idx}
+                      className={s.allowed_to_trade ? "row-signal-allowed" : "row-signal-disallowed"}
+                    >
                       <td>{idx + 1}</td>
-                      <td>{s.timestamp ? formatEST(s.timestamp) : "--"}</td>
+                      <td>{s.timestamp ? formatLocal(s.timestamp) : "--"}</td>
                       <td>{s.symbol}</td>
                       <td>
                         <span
@@ -514,7 +573,8 @@ export default function App() {
                       <td>{s.reasons?.join(", ") || "none"}</td>
                       <td title={s.trade_skipped_reason}>{s.trade_skipped_reason || "—"}</td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -532,14 +592,20 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {synthCalls.slice(0, 50).map((c, idx) => (
+                  {synthCalls.length === 0 ? (
+                    <tr className="table-empty-row">
+                      <td colSpan={4}>No data</td>
+                    </tr>
+                  ) : (
+                  synthCalls.slice(0, 50).map((c, idx) => (
                     <tr key={idx}>
                       <td>{idx + 1}</td>
-                      <td>{c.ts ? formatEST(c.ts) : "--"}</td>
+                      <td>{c.ts ? formatLocal(c.ts) : "--"}</td>
                       <td>{c.api || "--"}</td>
                       <td><code>{JSON.stringify(c.params || {})}</code></td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -616,10 +682,10 @@ export default function App() {
                 {newsRaw.map((r, idx) => (
                   <tr key={idx}>
                     <td>{idx + 1}</td>
-                    <td><a href={r.url} target="_blank" rel="noreferrer">{r.title}</a></td>
+                    <td><a className="news-title-link" href={r.url} target="_blank" rel="noreferrer">{r.title}</a></td>
                     <td>{r.source}</td>
                     <td>{(r.snippet || "").length > 150 ? `${String(r.snippet).slice(0, 150)}...` : String(r.snippet || "")}</td>
-                    <td>{r.published_at ? formatEST(r.published_at) : "--"}</td>
+                    <td>{r.published_at ? formatLocal(r.published_at) : "--"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -631,7 +697,7 @@ export default function App() {
       {page === "strike" && (
         <section className="panel">
           <h2>Strike Portfolio Allocation</h2>
-          <p>Last updated: {strikeLatest?.timestamp ? formatEST(strikeLatest.timestamp) : "--"}</p>
+          <p>Last updated: {strikeLatest?.timestamp ? formatLocal(strikeLatest.timestamp) : "--"}</p>
           <button onClick={() => api.strikeRefresh().then(() => api.strikeLatest().then(setStrikeLatest))}>
             Refresh
           </button>

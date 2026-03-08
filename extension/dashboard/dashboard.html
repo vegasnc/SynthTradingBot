@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DemoBot Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header-bar">
+      <h1 class="logo">Synth Trading Dashboard</h1>
+      <div class="header-kpis">
+        <span class="kpi-item kpi-status-wrap">
+          <span class="kpi-label">Engine Connection</span>
+          <span id="engineStatus" class="kpi-status">Connecting...</span>
+        </span>
+        <span class="kpi-item kpi-netliq">
+          <span class="kpi-label">Net Liq</span>
+          <span class="kpi-value">
+            <span class="kpi-icon kpi-icon-dollar" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+            <span id="headerRemainingFunds">—</span>
+          </span>
+        </span>
+        <span class="kpi-item kpi-pnl-wrap">
+          <span class="kpi-label">P&L</span>
+          <span class="kpi-value">
+            <span class="kpi-icon kpi-icon-chart" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></span>
+            <span id="headerPnl" class="kpi-pnl">—</span>
+          </span>
+        </span>
+        <span class="kpi-item kpi-trades">
+          <span class="kpi-label">Trades Today</span>
+          <span class="kpi-value">
+            <span class="kpi-icon kpi-icon-bars" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span>
+            <span id="headerTradesToday">—</span>
+          </span>
+        </span>
+      </div>
+      <div class="meta">
+        <a href="../options/options.html" target="_blank">Options</a>
+      </div>
+    </header>
+    <nav>
+      <button id="navOverview" class="nav-btn active">Dashboard</button>
+      <button id="navNews" class="nav-btn">News</button>
+    </nav>
+
+    <section id="pageOverview" class="panel">
+      <h2>Dashboard</h2>
+      <div class="overview-top">
+        <div class="initial-funds card">
+          <h3>Funds</h3>
+          <div class="funds-row">
+            <label>Deposit</label>
+            <input type="number" id="initialFundsInput" min="0" step="100" readonly />
+            <button id="toggleEditFunds" type="button" title="Edit">🔒</button>
+          </div>
+          <div class="funds-row remaining-row">
+            <label>Remaining</label>
+            <span id="remainingFunds">—</span>
+          </div>
+          <div class="exposure-by-asset">
+            <h4>Exposure by asset</h4>
+            <div id="exposureByAssetList" class="exposure-list"></div>
+          </div>
+        </div>
+        <div class="stats-box">
+          <h3>Stats</h3>
+          <div id="statsGrid" class="stats-grid"></div>
+        </div>
+        <div class="spot-strike-box">
+          <h3>Spot & Strike</h3>
+          <div id="assetSpotList" class="asset-spot-list"></div>
+        </div>
+        <div class="news-summary-box card">
+          <h3>News</h3>
+          <div id="newsSummaryOverview"></div>
+        </div>
+      </div>
+      <div class="dashboard-trades">
+        <h3>Positions & Signals</h3>
+        <div class="table-box">
+          <div class="table-title-row">
+            <h4>Positions <span id="positionsCount">(0 open)</span></h4>
+            <div class="table-controls">
+              <label for="positionsPeriod">Period</label>
+              <select id="positionsPeriod">
+                <option value="day">Today</option>
+                <option value="week" selected>Week</option>
+                <option value="month">Month</option>
+                <option value="year">Year</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+          </div>
+          <div class="positions-table-wrap">
+            <table id="positionsTable"><thead><tr><th>#</th><th>Status</th><th>Asset</th><th>Side</th><th>Qty</th><th>Entry</th><th>Stop</th><th>TP1</th><th>TP2</th><th>Partial</th><th>Opened</th><th>Closed</th><th>PnL</th><th>Action</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+        <div class="table-box">
+          <h4>Latest Signals (last 6h)</h4>
+          <p class="signals-hint">Allowed = signal passed checks. Skip Reason = why no position opened. "Portfolio/symbol exposure limit" = adding this trade would exceed max % of account in one symbol (MAX_SYMBOL_EXPOSURE) or total portfolio (MAX_PORTFOLIO_EXPOSURE).</p>
+          <div class="signals-table-wrap">
+            <table id="signalsTable">
+              <thead><tr><th>#</th><th>Time</th><th>Asset</th><th>Bias</th><th>Edge</th><th>Allowed</th><th>Reasons</th><th>Skip Reason</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="table-box">
+          <h4>Synth API Calls (Today)</h4>
+          <div class="synth-calls-wrap">
+            <table id="synthTable"><thead><tr><th>#</th><th>Time</th><th>API</th><th>Params</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pageNews" class="panel" style="display:none">
+      <h2>News</h2>
+      <div class="news-actions">
+        <button id="btnNewsRefresh">Scrape & Summarize</button>
+        <button id="btnNewsSummarize">Summarize from DB</button>
+      </div>
+      <div id="newsSummaryBox" class="news-summary-box"></div>
+      <div id="newsStickyNotes" class="news-sticky-notes"></div>
+      <div id="newsAssetBias" class="news-asset-bias"></div>
+      <h3>Raw News</h3>
+      <div class="trades-table-wrap">
+        <table id="newsRawTable"><thead><tr><th>#</th><th>Title</th><th>Source</th><th>Snippet</th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

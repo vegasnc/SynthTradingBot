@@ -21,9 +21,18 @@ def floor_to_minute(dt: datetime) -> datetime:
     return dt.replace(second=0, microsecond=0)
 
 
-def is_equity_tradable_now(now: datetime | None = None) -> bool:
+def _et_now(now: datetime | None = None) -> datetime:
+    """Current time in America/New_York."""
     current = now or utc_now()
-    et = current.astimezone(ZoneInfo("America/New_York"))
+    try:
+        return current.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return current.astimezone(ZoneInfo("US/Eastern"))
+
+
+def is_equity_tradable_now(now: datetime | None = None) -> bool:
+    """Regular session 9:45–16:00 ET, skip first 15 min."""
+    et = _et_now(now)
     if et.weekday() >= 5:
         return False
     start = et.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -34,4 +43,24 @@ def is_equity_tradable_now(now: datetime | None = None) -> bool:
     if et < skip_end:
         return False
     return True
+
+
+def is_moo_submission_window(now: datetime | None = None) -> bool:
+    """True if within MOO submission window (e.g. 4:00–9:28 ET)."""
+    et = _et_now(now)
+    if et.weekday() >= 5:
+        return False
+    moo_start = et.replace(hour=4, minute=0, second=0, microsecond=0)
+    moo_deadline = et.replace(hour=9, minute=28, second=0, microsecond=0)
+    return moo_start <= et < moo_deadline
+
+
+def is_moc_submission_window(now: datetime | None = None) -> bool:
+    """True if within MOC submission window (before 15:50 ET)."""
+    et = _et_now(now)
+    if et.weekday() >= 5:
+        return False
+    session_start = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    moc_deadline = et.replace(hour=15, minute=50, second=0, microsecond=0)
+    return session_start <= et < moc_deadline
 

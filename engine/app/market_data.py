@@ -1,10 +1,11 @@
 """
 Fetch crypto market data server-side (avoids browser CORS and Binance 451).
-Uses Binance first; falls back to Kraken if Binance is blocked (e.g. 451).
+Crypto: Binance/Kraken. Equity: Yahoo Finance chart API (no key required).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -18,8 +19,16 @@ logger = logging.getLogger(__name__)
 
 BINANCE_BASE = "https://api.binance.com/api/v3"
 KRAKEN_BASE = "https://api.kraken.com/0/public"
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-KRAKEN_PAIRS = {"BTC": "XXBTZUSD", "ETH": "XETHZUSD", "BTC-USD": "XXBTZUSD", "ETH-USD": "XETHZUSD"}
+KRAKEN_PAIRS = {
+    "BTC": "XXBTZUSD",
+    "ETH": "XETHZUSD",
+    "XAU": "XAUTUSD",
+    "BTC-USD": "XXBTZUSD",
+    "ETH-USD": "XETHZUSD",
+    "XAU-USD": "XAUTUSD",
+}
 
 
 def _to_binance_pair(symbol: str) -> str:
@@ -123,10 +132,11 @@ async def fetch_crypto_prices(
         binance_pair = _to_binance_pair(symbol)
         kraken_pair = _to_kraken_pair(symbol)
         # Try Kraken first (works in US); fall back to Binance (may return 451 geo-block)
+        # XAU (gold) only on Kraken (XAUT); skip Binance for XAU
         if kraken_pair:
             candles_1m = await _fetch_kraken(client, kraken_pair, 1, 50)
             candles_5m = await _fetch_kraken(client, kraken_pair, 5, 72)
-        if candles_1m is None or candles_5m is None:
+        if (candles_1m is None or candles_5m is None) and symbol != "XAU":
             candles_1m = candles_1m or await _fetch_binance(client, binance_pair, "1m", 50)
             candles_5m = candles_5m or await _fetch_binance(client, binance_pair, "5m", 72)
 
@@ -148,50 +158,76 @@ async def fetch_crypto_prices(
     return out
 
 
+async def _fetch_yahoo_equity_spot(client: httpx.AsyncClient, symbol: str) -> float | None:
+    """Fetch equity spot price via Yahoo Finance chart API. No API key required."""
+    try:
+        resp = await client.get(
+            f"{YAHOO_CHART}/{symbol}",
+            params={"interval": "1d", "range": "1d"},
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        chart = data.get("chart", {})
+        result = chart.get("result")
+        if not result or not isinstance(result, list):
+            return None
+        meta = result[0].get("meta") if isinstance(result[0], dict) else None
+        if not meta:
+            return None
+        price = meta.get("regularMarketPrice") or meta.get("previousClose")
+        if price is not None:
+            return float(price)
+        return None
+    except Exception:
+        return None
+
+
 async def fetch_spot_prices(
     client: httpx.AsyncClient,
     symbols: list[SymbolConfig],
 ) -> dict[str, float]:
-    """Fetch current spot prices only (lightweight, for real-time TP/stop detection)."""
+    """Fetch current spot prices (crypto: Binance/Kraken, equity: Yahoo Finance)."""
     out: dict[str, float] = {}
     for cfg in symbols:
-        if cfg.market_type != "crypto":
-            continue
         symbol = cfg.symbol
-        binance_pair = _to_binance_pair(symbol)
-        kraken_pair = _to_kraken_pair(symbol)
-
-        price: float | None = None
-        if kraken_pair:
-            try:
-                resp = await client.get(
-                    f"{KRAKEN_BASE}/Ticker",
-                    params={"pair": kraken_pair},
-                    timeout=5.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if not data.get("error"):
-                        result = data.get("result", {})
-                        pair_data = result.get(kraken_pair) or (list(result.values())[0] if result else None)
-                        if pair_data and isinstance(pair_data, dict):
-                            c = pair_data.get("c")
-                            if isinstance(c, (list, tuple)) and c:
-                                price = float(c[0])
-            except Exception:
-                pass
-        if price is None:
-            try:
-                resp = await client.get(
-                    f"{BINANCE_BASE}/ticker/price",
-                    params={"symbol": binance_pair},
-                    timeout=5.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    price = float(data.get("price", 0) or 0)
-            except Exception:
-                pass
+        if cfg.market_type == "crypto":
+            binance_pair = _to_binance_pair(symbol)
+            kraken_pair = _to_kraken_pair(symbol)
+            price: float | None = None
+            if kraken_pair:
+                try:
+                    resp = await client.get(
+                        f"{KRAKEN_BASE}/Ticker",
+                        params={"pair": kraken_pair},
+                        timeout=5.0,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data.get("error"):
+                            result = data.get("result", {})
+                            pair_data = result.get(kraken_pair) or (list(result.values())[0] if result else None)
+                            if pair_data and isinstance(pair_data, dict):
+                                c = pair_data.get("c")
+                                if isinstance(c, (list, tuple)) and c:
+                                    price = float(c[0])
+                except Exception:
+                    pass
+            if price is None:
+                try:
+                    resp = await client.get(
+                        f"{BINANCE_BASE}/ticker/price",
+                        params={"symbol": binance_pair},
+                        timeout=5.0,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        price = float(data.get("price", 0) or 0)
+                except Exception:
+                    pass
+        else:
+            price = await _fetch_yahoo_equity_spot(client, symbol)
         if price and price > 0:
             out[symbol] = price
     return out
