@@ -10,11 +10,17 @@ getEngineUrl().then((url) => {
 
 saveBtn.addEventListener("click", async () => {
   const url = input.value.trim();
+  status.classList.remove("success", "error");
   if (!url) {
     status.textContent = "URL cannot be empty.";
+    status.classList.add("error");
     return;
   }
   await setEngineUrl(url);
   status.textContent = "Saved.";
-  setTimeout(() => (status.textContent = ""), 2000);
+  status.classList.add("success");
+  setTimeout(() => {
+    status.textContent = "";
+    status.classList.remove("success");
+  }, 2000);
 });
