@@ -405,13 +405,39 @@ export default function App() {
                   [...positions.open, ...positions.history].map((p, idx) => {
                     const isOpen = p.status === "open";
                     const spot = positions.spot_by_symbol?.[p.symbol];
-                    const unrealized =
-                      isOpen && spot != null
-                        ? (p.side === "long" ? (spot - (p.entry_price ?? 0)) : ((p.entry_price ?? 0) - spot)) *
-                          (p.qty ?? 0)
-                        : null;
-                    const displayPnl = isOpen && unrealized != null ? unrealized : Number(p.realized_pnl ?? 0);
-                    const pnlLabel = isOpen && unrealized != null ? "unreal." : "realized";
+                    const entry = Number(p.entry_price ?? 0);
+                    const qty = Number(p.qty ?? 0);
+                    const origQty = Number((p as any).original_qty ?? qty);
+                    const tp1 = (p as any).tp1 != null ? Number((p as any).tp1) : null;
+                    const tp1Closed = (p as any).tp1_closed === true;
+                    let displayPnl: number;
+                    let pnlDisplay: React.ReactNode;
+                    const fmt = (n: number) => (n >= 0 ? n.toFixed(2) : `-${Math.abs(n).toFixed(2)}`);
+                    if (!isOpen) {
+                      displayPnl = Number(p.realized_pnl ?? 0);
+                      pnlDisplay = displayPnl.toFixed(2);
+                    } else if (tp1Closed && tp1 != null && origQty > 0 && spot != null) {
+                      const closeQty = origQty * 0.5;
+                      const profitTp1 = p.side === "long" ? (tp1 - entry) * closeQty : (entry - tp1) * closeQty;
+                      const currentPnl = p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty;
+                      displayPnl = profitTp1 + currentPnl;
+                      pnlDisplay = (
+                        <>Profit TP1 {fmt(profitTp1)} + current {fmt(currentPnl)} = Total {displayPnl.toFixed(2)}</>
+                      );
+                    } else {
+                      const unrealized =
+                        spot != null
+                          ? (p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty)
+                          : null;
+                      displayPnl = unrealized ?? Number(p.realized_pnl ?? 0);
+                      pnlDisplay = (
+                        <>
+                          {displayPnl.toFixed(2)}
+                          {unrealized != null && <span className="pnl-sublabel"> (u)</span>}
+                        </>
+                      );
+                    }
+                    const pnlLabel = tp1Closed ? "Profit TP1 (50% closed) + current PnL (remaining 50%) = Total" : isOpen ? "unreal." : "realized";
                     const posId = (p as any)._id;
                     const isClosing = posId && closingPositionId === posId;
                     const handleClose = async () => {
@@ -445,11 +471,8 @@ export default function App() {
                         <td>{Number(p.stop_price ?? 0).toFixed(2)}</td>
                         <td>{Number(p.tp ?? p.tp1 ?? p.tp2 ?? 0).toFixed(2)}</td>
                         <td>{p.status}</td>
-                        <td className={displayPnl >= 0 ? "pnl-pos" : "pnl-neg"} title={pnlLabel}>
-                          {displayPnl.toFixed(2)}
-                          {isOpen && unrealized != null && (
-                            <span className="pnl-sublabel"> (u)</span>
-                          )}
+                        <td className={`${displayPnl >= 0 ? "pnl-pos" : "pnl-neg"} pnl-cell`} title={pnlLabel}>
+                          {pnlDisplay}
                         </td>
                         <td>
                           {isOpen && posId ? (

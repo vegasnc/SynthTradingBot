@@ -147,9 +147,27 @@ async function load() {
     const all = [...open.map((p) => ({ ...p, status: "open" })), ...closed.map((p) => ({ ...p, status: "closed" }))];
     for (const p of all) {
       const isOpen = p.status === "open";
-      const pnl = isOpen
-        ? (p.side === "long" ? (spotBy[p.symbol] || p.entry_price) - p.entry_price : p.entry_price - (spotBy[p.symbol] || p.entry_price)) * p.qty
-        : (p.realized_pnl ?? 0);
+      const spot = parseFloat(spotBy[p.symbol] || p.entry_price) || 0;
+      const entry = parseFloat(p.entry_price) || 0;
+      const qty = parseFloat(p.qty) || 0;
+      const origQty = parseFloat(p.original_qty) ?? qty;
+      const tp1 = p.tp1 != null ? parseFloat(p.tp1) : null;
+      let pnl;
+      let pnlDisplay;
+      if (!isOpen) {
+        pnl = p.realized_pnl ?? 0;
+        pnlDisplay = `PnL ${formatPrice(pnl)}`;
+      } else if (p.tp1_closed && tp1 != null && origQty > 0) {
+        const closeQty = origQty * 0.5;
+        const profitTp1 = p.side === "long" ? (tp1 - entry) * closeQty : (entry - tp1) * closeQty;
+        const currentPnl = p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty;
+        pnl = profitTp1 + currentPnl;
+        const fmt = (n) => (n >= 0 ? formatPrice(n) : `-${formatPrice(Math.abs(n))}`);
+        pnlDisplay = `Profit TP1 ${fmt(profitTp1)} + current ${fmt(currentPnl)} = Total ${formatPrice(pnl)}`;
+      } else {
+        pnl = p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty;
+        pnlDisplay = `PnL ${formatPrice(pnl)}`;
+      }
       const sideClass = p.side === "long" ? "position-side-long" : "position-side-short";
       const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
       const row = document.createElement("div");
@@ -166,7 +184,7 @@ async function load() {
         </div>
         <div class="position-details">
           ${details}
-          <span class="${pnlClass}">PnL ${formatPrice(pnl)}</span>
+          <span class="${pnlClass}">${pnlDisplay}</span>
         </div>
       `;
       positionsList.appendChild(row);

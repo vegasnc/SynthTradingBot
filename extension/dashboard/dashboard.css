@@ -333,6 +333,7 @@ th { background: var(--bg-panel); font-weight: 600; color: var(--text-muted); }
 }
 .pnl-pos { color: var(--green); font-weight: 500; }
 .pnl-neg { color: var(--red); font-weight: 500; }
+.pnl-cell { white-space: normal; word-break: break-word; max-width: 200px; }
 .row-pnl-pos { border-left: 4px solid var(--row-pos); }
 .row-pnl-neg { border-left: 4px solid var(--row-neg); }
 .row-signal-allowed { border-left: 4px solid var(--row-pos); }

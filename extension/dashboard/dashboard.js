@@ -159,10 +159,27 @@ async function loadPositions(data) {
       const tr = document.createElement("tr");
       const isOpen = p.status === "open";
       const status = isOpen ? "Open" : "Closed";
-      const spot = spotBy[p.symbol] || p.entry_price;
-      const pnl = isOpen
-        ? (p.side === "long" ? (spot - p.entry_price) * p.qty : (p.entry_price - spot) * p.qty)
-        : (p.realized_pnl ?? 0);
+      const spot = parseFloat(spotBy[p.symbol] || p.entry_price) || 0;
+      const entry = parseFloat(p.entry_price) || 0;
+      const qty = parseFloat(p.qty) || 0;
+      const origQty = parseFloat(p.original_qty) ?? qty;
+      const tp1 = p.tp1 != null ? parseFloat(p.tp1) : null;
+      let pnl;
+      let pnlDisplay;
+      if (!isOpen) {
+        pnl = p.realized_pnl ?? 0;
+        pnlDisplay = formatPrice(pnl);
+      } else if (p.tp1_closed && tp1 != null && origQty > 0) {
+        const closeQty = origQty * 0.5;
+        const profitTp1 = p.side === "long" ? (tp1 - entry) * closeQty : (entry - tp1) * closeQty;
+        const currentPnl = p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty;
+        pnl = profitTp1 + currentPnl;
+        const fmt = (n) => (n >= 0 ? formatPrice(n) : `-${formatPrice(Math.abs(n))}`);
+        pnlDisplay = `Profit TP1 ${fmt(profitTp1)} + current ${fmt(currentPnl)} = Total ${formatPrice(pnl)}`;
+      } else {
+        pnl = p.side === "long" ? (spot - entry) * qty : (entry - spot) * qty;
+        pnlDisplay = formatPrice(pnl);
+      }
       const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
       const stop = p.stop_price ?? p.stop ?? "--";
       const tp1Val = p.tp1 != null ? (typeof p.tp1 === "number" ? formatPrice(p.tp1) : p.tp1) : "—";
@@ -176,7 +193,7 @@ async function loadPositions(data) {
         ? `<button type="button" class="btn-close-position" data-position-id="${p._id}" title="Close this position">Close</button>`
         : "—";
       tr.className = rowClass;
-      tr.innerHTML = `<td>${i + 1}</td><td>${status}</td><td>${p.symbol}</td><td>${p.side}</td><td>${qtyDisplay}</td><td>${formatPrice(p.entry_price)}</td><td>${typeof stop === "number" ? formatPrice(stop) : stop}</td><td>${tp1Val}</td><td>${tp2Val}</td><td>${partial}</td><td>${openedAt}</td><td>${closedAt}</td><td class="${pnlClass}">${formatPrice(pnl)}</td><td>${actionCell}</td>`;
+      tr.innerHTML = `<td>${i + 1}</td><td>${status}</td><td>${p.symbol}</td><td>${p.side}</td><td>${qtyDisplay}</td><td>${formatPrice(p.entry_price)}</td><td>${typeof stop === "number" ? formatPrice(stop) : stop}</td><td>${tp1Val}</td><td>${tp2Val}</td><td>${partial}</td><td>${openedAt}</td><td>${closedAt}</td><td class="${pnlClass} pnl-cell">${pnlDisplay}</td><td>${actionCell}</td>`;
       positionsTable.appendChild(tr);
     });
   } catch (_) {}

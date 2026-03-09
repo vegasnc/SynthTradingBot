@@ -270,6 +270,12 @@ pre {
   border-left: 4px solid #ff4d4d;
 }
 
+.pnl-cell {
+  white-space: normal;
+  word-break: break-word;
+  max-width: 220px;
+}
+
 .pnl-sublabel {
   font-size: 10px;
   opacity: 0.8;
