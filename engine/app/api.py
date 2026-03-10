@@ -576,7 +576,16 @@ def build_app() -> Starlette:
                 pnl = (spot - entry) * qty if side == "long" else (entry - spot) * qty
                 await store.db.positions.update_one(
                     {"_id": oid},
-                    {"$set": {"status": "closed", "closed_at": utc_now()}, "$inc": {"realized_pnl": pnl}},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "closed_at": utc_now(),
+                            "close_price": spot,
+                            "tp2_fill_price": spot,
+                            "profit_tp2": pnl,
+                        },
+                        "$inc": {"realized_pnl": pnl},
+                    },
                 )
         if req.get("risk_pct_crypto") is not None:
             state.crypto_risk_pct = float(req["risk_pct_crypto"])

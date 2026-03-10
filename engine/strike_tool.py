@@ -42,8 +42,10 @@ async def compute_strike_allocations(
     synth_asset_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
-    Compute allocation weights for strike symbols using Synth 1h predictions.
-    Returns dict with allocations per asset.
+    Compute allocation weights for strike symbols using Synth predictions.
+    Tries live Synth API first; if that fails, falls back to the latest cached
+    prediction in Mongo so that assets like SOL/JITOSOL still get strike weights
+    when the engine has been using Synth successfully elsewhere.
     """
     raw_scores: dict[str, float] = {}
     raw_data: dict[str, dict] = {}
@@ -57,8 +59,23 @@ async def compute_strike_allocations(
             payload = await synth.get_prediction_percentiles(asset=asset, horizon=horizon)
             pct = synth.parse_percentiles(payload)
         except Exception as e:
-            logger.warning("Strike: failed to get percentiles for %s: %s", asset, e)
-            continue
+            # If live Synth call fails (rate limit, asset name mismatch, etc.),
+            # fall back to the latest cached prediction used by the engine for signals.
+            logger.warning("Strike: failed to get percentiles for %s: %s; trying cached prediction", asset, e)
+            try:
+                cached = await store.db.synth_predictions.find_one(
+                    {"symbol": sym}, sort=[("timestamp", -1)]
+                )
+            except Exception as e2:
+                logger.warning("Strike: failed to load cached prediction for %s: %s", sym, e2)
+                continue
+            if not cached:
+                continue
+            try:
+                pct = synth.parse_percentiles({"percentiles": cached.get("percentiles") or {}})
+            except Exception as e3:
+                logger.warning("Strike: failed to parse cached percentiles for %s: %s", sym, e3)
+                continue
 
         # Fetch liquidation for edge score (24h for xStocks, 1h for crypto)
         liq_payload: dict[str, Any] | None = None
@@ -125,8 +142,8 @@ async def compute_strike_allocations(
     if total_w > 0:
         weights = {s: weights[s] / total_w for s in weights}
 
-    # Apply max_total_crypto for known crypto assets
-    base_crypto = {"BTC", "ETH", "SOL"}
+    # Apply max_total_crypto for known crypto assets (include SOL and JITOSOL)
+    base_crypto = {"BTC", "ETH", "SOL", "JITOSOL"}
     crypto_symbols = {s for s in weights if s in base_crypto or (s.endswith("-USD") and s.split("-")[0] in base_crypto)}
     total_crypto = sum(weights.get(s, 0) for s in crypto_symbols)
     if total_crypto > max_total_crypto:
@@ -137,19 +154,27 @@ async def compute_strike_allocations(
         if total_w > 0:
             weights = {s: weights[s] / total_w for s in weights}
 
-    # Build allocations with confidence
+    # Build allocations with confidence (after smoothing and final normalization)
     allocations: dict[str, dict] = {}
     prev_snapshot = await store.db.strike_snapshots.find_one(
         {}, sort=[("timestamp", -1)], projection={"allocations": 1}
     )
     prev_alloc = (prev_snapshot or {}).get("allocations") or {}
 
+    # First compute smoothed weights, then renormalize so they sum to 1.0
+    smoothed_weights: dict[str, float] = {}
     for sym in raw_data:
-        rw = weights.get(sym, 0)
-        prev_w = float((prev_alloc.get(sym) or {}).get("weight", 0))
-        smoothed = 0.7 * prev_w + 0.3 * rw
+        rw = weights.get(sym, 0.0)
+        prev_w = float((prev_alloc.get(sym) or {}).get("weight", 0.0))
+        smoothed_weights[sym] = 0.7 * prev_w + 0.3 * rw
 
-        rd = raw_data[sym]
+    total_sw = sum(smoothed_weights.values())
+    if total_sw > 0:
+        for sym in smoothed_weights:
+            smoothed_weights[sym] /= total_sw
+
+    for sym, rd in raw_data.items():
+        w = smoothed_weights.get(sym, 0.0)
         confidence = _clamp(int(rd["score"] * 40), 0, 100)
         if rd["uncertainty"] > 0.08:
             confidence = max(0, confidence - 30)
@@ -157,7 +182,7 @@ async def compute_strike_allocations(
             confidence = max(0, confidence - 15)
 
         allocations[sym] = {
-            "weight": round(smoothed, 4),
+            "weight": round(w, 4),
             "confidence": confidence,
             "bias": rd["bias"],
             "edge": round(rd["edge"], 4),

@@ -34,6 +34,23 @@ KRAKEN_PAIRS = {
     "JITOSOL-USD": "JITOSOLUSD",
 }
 
+# Kraken xStocks spot pairs (tokenized U.S. equities on Kraken Pro, quoted vs USD)
+# Used to fetch equity spot prices from Kraken instead of (or before) Yahoo.
+KRAKEN_XSTOCK_SPOT_PAIRS = {
+    # ETF / indices
+    "SPY": "SPYxUSD",
+    "SPYX": "SPYxUSD",
+    # Single-name equities
+    "AAPL": "AAPLxUSD",
+    "AAPLX": "AAPLxUSD",
+    "NVDA": "NVDAxUSD",
+    "NVDAX": "NVDAxUSD",
+    "TSLA": "TSLAxUSD",
+    "TSLAX": "TSLAxUSD",
+    "GOOGL": "GOOGLxUSD",
+    "GOOGLX": "GOOGLxUSD",
+}
+
 
 def _to_binance_pair(symbol: str) -> str:
     base = symbol.replace("-USD", "").replace("-", "").upper()
@@ -163,7 +180,7 @@ async def fetch_crypto_prices(
 
 
 async def _fetch_yahoo_equity_spot(client: httpx.AsyncClient, symbol: str) -> float | None:
-    """Fetch equity spot price via Yahoo Finance chart API. No API key required."""
+    """(Legacy) Fetch equity spot price via Yahoo Finance chart API. Currently unused."""
     try:
         resp = await client.get(
             f"{YAHOO_CHART}/{symbol}",
@@ -192,7 +209,7 @@ async def fetch_spot_prices(
     client: httpx.AsyncClient,
     symbols: list[SymbolConfig],
 ) -> dict[str, float]:
-    """Fetch current spot prices (crypto: Binance/Kraken, equity: Yahoo Finance)."""
+    """Fetch current spot prices (crypto: Binance/Kraken, equity: Kraken xStocks then Yahoo)."""
     out: dict[str, float] = {}
     for cfg in symbols:
         symbol = cfg.symbol
@@ -231,7 +248,28 @@ async def fetch_spot_prices(
                 except Exception:
                     pass
         else:
-            price = await _fetch_yahoo_equity_spot(client, symbol)
+            price = None
+            # 1) Try Kraken xStocks spot (tokenized equities like GOOGLx, SPYx, etc.)
+            kraken_pair = KRAKEN_XSTOCK_SPOT_PAIRS.get(symbol) or KRAKEN_XSTOCK_SPOT_PAIRS.get(symbol.upper())
+            if kraken_pair:
+                try:
+                    resp = await client.get(
+                        f"{KRAKEN_BASE}/Ticker",
+                        # asset_class=tokenized_asset is required for xStocks on Kraken
+                        params={"pair": kraken_pair, "asset_class": "tokenized_asset"},
+                        timeout=5.0,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data.get("error"):
+                            result = data.get("result", {})
+                            pair_data = result.get(kraken_pair) or (list(result.values())[0] if result else None)
+                            if pair_data and isinstance(pair_data, dict):
+                                c = pair_data.get("c")
+                                if isinstance(c, (list, tuple)) and c:
+                                    price = float(c[0])
+                except Exception:
+                    price = None
         if price and price > 0:
             out[symbol] = price
     return out

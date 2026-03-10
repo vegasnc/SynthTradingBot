@@ -683,6 +683,12 @@ class EngineScheduler:
             "realized_pnl": 0.0,
             "cooldown_until": None,
             "tp1_closed": False,
+            # Profit tracking and realized fill prices
+            "tp1_fill_price": None,
+            "tp2_fill_price": None,
+            "close_price": None,
+            "profit_tp1": 0.0,
+            "profit_tp2": 0.0,
             "metadata": {"signal": signal},
         }
         await self.store.db.positions.insert_one(pos)
@@ -726,46 +732,68 @@ class EngineScheduler:
 
             if hit_tp2:
                 close_qty = cur_qty
-                pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
+                fill_price = spot
+                pnl_leg = ((fill_price - entry) if side == "long" else (entry - fill_price)) * close_qty
                 await self.store.db.positions.update_one(
                     {"_id": pos["_id"]},
                     {
-                        "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": None},
-                        "$inc": {"realized_pnl": pnl},
+                        "$set": {
+                            "status": "closed",
+                            "closed_at": utc_now(),
+                            "cooldown_until": None,
+                            "close_price": fill_price,
+                            "tp2_fill_price": fill_price,
+                            "profit_tp2": pnl_leg,
+                        },
+                        "$inc": {"realized_pnl": pnl_leg},
                     },
                 )
-                logger.info("TP2 hit - closed %s %s: spot=%.2f tp2=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, spot, tp2_val or tp, close_qty, pnl)
-                self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl, "reason": "tp2"})
+                logger.info("TP2 hit - closed %s %s: spot=%.2f tp2=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, fill_price, tp2_val or tp, close_qty, pnl_leg)
+                self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl_leg, "reason": "tp2"})
                 continue
 
             if hit_tp1 and not pos_cur.get("tp1_closed", False):
                 close_qty = cur_qty * 0.5
                 if close_qty > 0:
-                    pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
+                    fill_price = spot
+                    pnl_leg = ((fill_price - entry) if side == "long" else (entry - fill_price)) * close_qty
                     new_qty = cur_qty - close_qty
                     await self.store.db.positions.update_one(
                         {"_id": pos["_id"]},
                         {
-                            "$set": {"qty": new_qty, "tp1_closed": True},
-                            "$inc": {"realized_pnl": pnl},
+                            "$set": {
+                                "qty": new_qty,
+                                "tp1_closed": True,
+                                "tp1_fill_price": fill_price,
+                                "profit_tp1": pnl_leg,
+                            },
+                            "$inc": {"realized_pnl": pnl_leg},
                         },
                     )
-                    logger.info("TP1 hit - closed 50%% %s %s: spot=%.2f tp1=%.2f close_qty=%.4f pnl=%.2f remaining_qty=%.4f", cfg.symbol, side, spot, tp1_val or tp, close_qty, pnl, new_qty)
-                    self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl, "reason": "tp1_partial", "remaining_qty": new_qty})
+                    logger.info("TP1 hit - closed 50%% %s %s: spot=%.2f tp1=%.2f close_qty=%.4f pnl=%.2f remaining_qty=%.4f", cfg.symbol, side, fill_price, tp1_val or tp, close_qty, pnl_leg, new_qty)
+                    self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": False, "pnl": pnl_leg, "reason": "tp1_partial", "remaining_qty": new_qty})
                 continue
 
             if hit_stop:
                 close_qty = cur_qty
-                pnl = ((spot - entry) if side == "long" else (entry - spot)) * close_qty
+                fill_price = spot
+                pnl_leg = ((fill_price - entry) if side == "long" else (entry - fill_price)) * close_qty
                 await self.store.db.positions.update_one(
                     {"_id": pos_cur["_id"]},
                     {
-                        "$set": {"status": "closed", "closed_at": utc_now(), "cooldown_until": None},
-                        "$inc": {"realized_pnl": pnl},
+                        "$set": {
+                            "status": "closed",
+                            "closed_at": utc_now(),
+                            "cooldown_until": None,
+                            "close_price": fill_price,
+                            "tp2_fill_price": fill_price,
+                            "profit_tp2": pnl_leg,
+                        },
+                        "$inc": {"realized_pnl": pnl_leg},
                     },
                 )
-                logger.info("closed %s %s: hit_stop=%s spot=%.2f stop=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, hit_stop, spot, stop, close_qty, pnl)
-                self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": hit_stop, "pnl": pnl})
+                logger.info("closed %s %s: hit_stop=%s spot=%.2f stop=%.2f qty=%.4f pnl=%.2f", cfg.symbol, side, hit_stop, fill_price, stop, close_qty, pnl_leg)
+                self.state.push_update("position_closed", {"symbol": cfg.symbol, "hit_stop": hit_stop, "pnl": pnl_leg})
 
     async def _within_portfolio_exposure(self, symbol: str, entry_price: float, qty: float) -> bool:
         notional = entry_price * qty
