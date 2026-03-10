@@ -16,6 +16,7 @@ from .db import MongoStore
 from .state import EngineState
 from .strategy import (
     build_decision_with_market_strength,
+    compute_edge_score,
     compute_position_size,
     confirm_entry,
     market_direction_from_momentum,
@@ -420,6 +421,23 @@ class EngineScheduler:
         decision.allowed_to_trade = decision.allowed_to_trade and entry_ok and self.state.trading_enabled
         if not entry_ok and not use_synthetic_candles:
             decision.reasons.append("entry_confirmation_failed")
+
+        # Edge Score from Synth prediction + liquidation
+        horizon = "24h" if cfg.market_type == "equity" else "1h"
+        liq_payload = None
+        if decision.bias in ("long", "short"):
+            try:
+                liq_payload = await self.synth.get_liquidation_insight(
+                    synth_asset_for_symbol(symbol, self._synth_asset_map), horizon=horizon
+                )
+            except Exception:
+                pass
+        edge_score = (
+            compute_edge_score(spot, self.synth.parse_percentiles({"percentiles": pct}), decision.bias, liq_payload)
+            if decision.bias in ("long", "short")
+            else 0.0
+        )
+
         signal_doc = {
             "symbol": symbol,
             "market_type": cfg.market_type,
@@ -447,6 +465,7 @@ class EngineScheduler:
                 "central_range": decision.central_range,
             },
             "flags": decision.flags | {"entry_confirmation_pass": entry_ok},
+            "edge_score": edge_score,
         }
         result = await self.store.db.signals.insert_one(signal_doc)
         signal_id = result.inserted_id
@@ -593,14 +612,15 @@ class EngineScheduler:
         stop_price = float(levels.get("stop", 0))
         side = "buy" if new_side == "long" else "sell"
         risk_pct = self.state.crypto_risk_pct if cfg.market_type == "crypto" else self.state.equity_risk_pct
-        # Optional liquidation-aware adjustment for crypto: move stop 0.3% outside nearest high-probability band and reduce size.
+        # Optional liquidation-aware adjustment: move stop 0.3% outside nearest high-probability band and reduce size.
+        # Use 24h horizon for xStocks (Synth API does not support 1h for equity).
         size_scale = 1.0
-        if cfg.market_type == "crypto":
-            liq = await self.synth.get_liquidation_insight(synth_asset_for_symbol(symbol, self._synth_asset_map), horizon="1h")
-            adjusted = self._adjust_stop_from_liquidation(stop_price, liq, signal["bias"])
-            if adjusted is not None:
-                stop_price = adjusted
-                size_scale = 0.85
+        horizon = "24h" if cfg.market_type == "equity" else "1h"
+        liq = await self.synth.get_liquidation_insight(synth_asset_for_symbol(symbol, self._synth_asset_map), horizon=horizon)
+        adjusted = self._adjust_stop_from_liquidation(stop_price, liq, signal["bias"])
+        if adjusted is not None:
+            stop_price = adjusted
+            size_scale = 0.85
         qty = compute_position_size(
             account_equity=self.state.account_equity,
             risk_pct=risk_pct,

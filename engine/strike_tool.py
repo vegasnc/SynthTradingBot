@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.strategy import compute_edge_score
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,13 +51,21 @@ async def compute_strike_allocations(
     for sym in strike_symbols:
         asset = _synth_asset(sym, synth_asset_map)
         # Synth API supports only 24h horizon for xStocks (equity)
-        horizon = "24h" if sym in _XSTOCK_TO_SYNTH else "1h"
+        is_equity = sym in _XSTOCK_TO_SYNTH or (synth_asset_map and sym in synth_asset_map)
+        horizon = "24h" if is_equity else "1h"
         try:
             payload = await synth.get_prediction_percentiles(asset=asset, horizon=horizon)
             pct = synth.parse_percentiles(payload)
         except Exception as e:
             logger.warning("Strike: failed to get percentiles for %s: %s", asset, e)
             continue
+
+        # Fetch liquidation for edge score (24h for xStocks, 1h for crypto)
+        liq_payload: dict[str, Any] | None = None
+        try:
+            liq_payload = await synth.get_liquidation_insight(asset=asset, horizon=horizon)
+        except Exception:
+            pass
 
         spot = state.latest_price.get(sym) or state.latest_price.get(f"{sym}-USD")
         if not spot and state.latest_market_data:
@@ -75,7 +85,16 @@ async def compute_strike_allocations(
         edge = (pct.p50 - spot) / spot
         uncertainty = (pct.p95 - pct.p05) / spot
         central_range = pct.p80 - pct.p20
-        score = abs(edge) / max(uncertainty, 0.000001)
+        bias = "long" if edge > 0 else ("short" if edge < 0 else "neutral")
+        # Edge Score = directional_signal + volatility_mispricing + liquidity_score - decay_risk - liquidation_risk
+        if bias == "neutral":
+            edge_score = max(
+                compute_edge_score(spot, pct, "long", liq_payload),
+                compute_edge_score(spot, pct, "short", liq_payload),
+            )
+        else:
+            edge_score = compute_edge_score(spot, pct, bias, liq_payload)
+        score = max(edge_score, abs(edge) / max(uncertainty, 0.000001))
         raw_weight = max(score - 0.25, 0.0)
 
         raw_scores[sym] = raw_weight
@@ -84,7 +103,8 @@ async def compute_strike_allocations(
             "uncertainty": uncertainty,
             "central_range": central_range,
             "score": score,
-            "bias": "long" if edge > 0 else ("short" if edge < 0 else "neutral"),
+            "edge_score": edge_score,
+            "bias": bias,
         }
 
     if not raw_scores:
@@ -141,6 +161,7 @@ async def compute_strike_allocations(
             "confidence": confidence,
             "bias": rd["bias"],
             "edge": round(rd["edge"], 4),
+            "edge_score": round(rd.get("edge_score", 0), 4),
             "uncertainty": round(rd["uncertainty"], 4),
         }
 
@@ -168,9 +189,10 @@ async def run_strike_refresh(
         max_total_crypto=0.60,
         synth_asset_map=synth_asset_map,
     )
+    has_equity = any(s in _XSTOCK_TO_SYNTH or (synth_asset_map and s in synth_asset_map) for s in symbols)
     doc = {
         "timestamp": datetime.now(timezone.utc),
-        "horizon": "1h",
+        "horizon": "mixed" if has_equity else "1h",
         "allocations": result["allocations"],
     }
     await store.db.strike_snapshots.insert_one(doc)

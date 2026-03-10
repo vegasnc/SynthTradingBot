@@ -1,12 +1,73 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .models import Percentiles
 
 Bias = Literal["long", "short", "flat"]
 MarketType = Literal["crypto", "equity"]
+
+
+def _extract_liquidation_risk(liquidation_payload: dict[str, Any] | None, bias: Literal["long", "short"]) -> float:
+    """Extract liquidation probability for the given bias from Synth /insights/liquidation response."""
+    if not liquidation_payload:
+        return 0.0
+    rows = liquidation_payload.get("data") or liquidation_payload.get("levels") or []
+    max_prob = 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lp = row.get("long_liquidation_probability") or row.get("long_prob") or row.get("long_6h") or {}
+        sp = row.get("short_liquidation_probability") or row.get("short_prob") or row.get("short_6h") or {}
+        if isinstance(lp, dict):
+            lp = float(lp.get("24") or lp.get("6") or 0)
+        else:
+            lp = float(lp) if lp is not None else 0
+        if isinstance(sp, dict):
+            sp = float(sp.get("24") or sp.get("6") or 0)
+        else:
+            sp = float(sp) if sp is not None else 0
+        prob = lp if bias == "long" else sp
+        max_prob = max(max_prob, prob)
+    return min(max_prob, 1.0)
+
+
+def compute_edge_score(
+    spot: float,
+    pct: Percentiles,
+    bias: Literal["long", "short"],
+    liquidation_payload: dict[str, Any] | None = None,
+) -> float:
+    """
+    Edge Score = directional_signal + volatility_mispricing + liquidity_score - decay_risk - liquidation_risk
+    Uses prediction percentiles and liquidation probability from Synth API.
+    """
+    if spot <= 0:
+        return 0.0
+    uncertainty = (pct.p95 - pct.p05) / spot
+    central_range = pct.p80 - pct.p20
+
+    # directional_signal: normalized expected move in our favor
+    if bias == "long":
+        directional_signal = (pct.p50 - spot) / spot
+    else:
+        directional_signal = (spot - pct.p50) / spot
+    directional_signal = max(0.0, directional_signal)
+
+    # volatility_mispricing: when uncertainty is low, we have clearer edge (narrow range = opportunity)
+    volatility_mispricing = max(0.0, 0.08 - uncertainty)
+
+    # liquidity_score: no direct input from Synth; use neutral
+    liquidity_score = 0.0
+
+    # decay_risk: spot/crypto has no time decay
+    decay_risk = 0.0
+
+    # liquidation_risk: from /insights/liquidation
+    liquidation_risk = _extract_liquidation_risk(liquidation_payload, bias)
+
+    return directional_signal + volatility_mispricing + liquidity_score - decay_risk - liquidation_risk
 
 
 def market_direction_from_momentum(

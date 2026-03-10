@@ -284,7 +284,7 @@ def build_app() -> Starlette:
         history = await hist_cursor.to_list(length=500)
         all_closed = await store.db.positions.find({"status": "closed"}).sort("closed_at", -1).to_list(length=10000)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_closed = [p for p in all_closed if as_utc(p.get("closed_at")) >= today_start]
+        today_closed = [p for p in all_closed if p.get("closed_at") and as_utc(p.get("closed_at")) >= today_start]
         today_pnl = sum(float(p.get("realized_pnl", 0)) for p in today_closed)
         total_pnl = sum(float(p.get("realized_pnl", 0)) for p in all_closed)
         pnls = [float(p.get("realized_pnl", 0)) for p in all_closed]
@@ -451,7 +451,7 @@ def build_app() -> Starlette:
         open_list = await store.db.positions.find({"status": "open"}).sort("opened_at", -1).limit(200).to_list(length=200)
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_closed = [p for p in all_closed if as_utc(p.get("closed_at")) >= today_start]
+        today_closed = [p for p in all_closed if p.get("closed_at") and as_utc(p.get("closed_at")) >= today_start]
         today_pnl = sum(float(p.get("realized_pnl", 0)) for p in today_closed)
         total_pnl = sum(float(p.get("realized_pnl", 0)) for p in all_closed)
         pnls = [float(p.get("realized_pnl", 0)) for p in all_closed]

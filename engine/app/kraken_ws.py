@@ -1,7 +1,7 @@
 """
 Kraken WebSocket real-time market data using python-kraken-sdk.
 Updates EngineState with live ticker (spot) and OHLC (candles) for crypto and xStocks.
-- BTC, ETH, XAU: spot + OHLC 1m/5m (unchanged).
+- BTC, ETH, XAUT (gold): spot + OHLC 1m/5m.
 - xStocks (GOOGLx, SPYx, NVDAx, TSLAx, AAPLx): ticker only (real-time price via Spot WS).
 """
 
@@ -17,11 +17,11 @@ from .utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# Kraken Spot: BTC, ETH, XAU, SOL, JITOSOL (spot + OHLC for first three only)
+# Kraken Spot: BTC, ETH, XAUT (gold), SOL, JITOSOL. Kraken uses XAUT/USD for gold, not XAU/USD.
 KRAKEN_TO_SYMBOLS: dict[str, list[str]] = {
     "BTC/USD": ["BTC", "BTC-USD"],
     "ETH/USD": ["ETH", "ETH-USD"],
-    "XAU/USD": ["XAU", "XAU-USD"],
+    "XAUT/USD": ["XAU", "XAU-USD"],
     "SOL/USD": ["SOL", "SOL-USD"],
     "JITOSOL/USD": ["JITOSOL", "JITOSOL-USD"],
     # xStocks (perpetual futures on Kraken; real-time via Spot WebSocket, ticker only)
@@ -34,7 +34,7 @@ KRAKEN_TO_SYMBOLS: dict[str, list[str]] = {
 # All symbols for ticker (spot + xStocks + SOL, JITOSOL)
 KRAKEN_SYMBOLS = list(KRAKEN_TO_SYMBOLS.keys())
 # Only these for OHLC (BTC, ETH, XAU) – SOL/JITOSOL ticker-only if Kraken doesn’t offer OHLC
-KRAKEN_OHLC_SYMBOLS = ["BTC/USD", "ETH/USD", "XAU/USD"]
+KRAKEN_OHLC_SYMBOLS = ["BTC/USD", "ETH/USD", "XAUT/USD"]
 
 
 def _symbols_for_kraken_pair(kraken_pair: str) -> list[str]:
@@ -42,7 +42,7 @@ def _symbols_for_kraken_pair(kraken_pair: str) -> list[str]:
 
 
 def _market_type_for_pair(kraken_pair: str) -> str:
-    """xStocks (e.g. GOOGLx/USD) are equity; BTC/USD, ETH/USD, XAU/USD are crypto."""
+    """xStocks (e.g. GOOGLx/USD) are equity; BTC/USD, ETH/USD, XAUT/USD are crypto."""
     base = (kraken_pair.split("/")[0] if "/" in kraken_pair else kraken_pair).strip()
     return "equity" if base.endswith("x") else "crypto"
 
@@ -50,8 +50,8 @@ def _market_type_for_pair(kraken_pair: str) -> str:
 def run_kraken_ws(state: EngineState) -> asyncio.Task[None]:
     """
     Start the Kraken WebSocket client in the background (Spot WS = wss://ws.kraken.com).
-    - Ticker: all symbols (BTC, ETH, XAU + xStocks GOOGLx, SPYx, NVDAx, TSLAx, AAPLx) for real-time spot.
-    - OHLC 1m/5m: BTC, ETH, XAU only (unchanged). xStocks are ticker-only (perpetual futures).
+    - Ticker: all symbols (BTC, ETH, XAUT + xStocks GOOGLx, SPYx, NVDAx, TSLAx, AAPLx) for real-time spot.
+    - OHLC 1m/5m: BTC, ETH, XAUT only. xStocks are ticker-only (perpetual futures).
     Updates state.latest_market_data and state.latest_price. No API key for public feeds.
     Returns the asyncio Task so the caller can cancel it on shutdown.
     """
