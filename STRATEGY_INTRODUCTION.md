@@ -41,7 +41,7 @@ Long Edge  = (P50 - Spot) / Spot   (positive when spot is below fair value)
 Short Edge = (Spot - P50) / Spot   (positive when spot is above fair value)
 ```
 
-**Edge Threshold**: A signal is only valid if `|Edge| >= 0.10 × Uncertainty`. This ensures the expected move is meaningful relative to forecast volatility.
+**Edge Threshold**: A signal is only valid if `|Edge| >= 0.15 × Uncertainty`. This ensures the expected move is meaningful relative to forecast volatility and reduces marginal trades.
 
 ---
 
@@ -60,10 +60,10 @@ The bot prefers trades aligned with market direction:
 
 | Market Direction | Preferred Trade | Counter-Trend Allowed If... |
 |------------------|-----------------|----------------------------|
-| Bullish | Long | Short edge > 1.5× Long edge |
-| Bearish | Short | Long edge > 1.5× Short edge |
+| Bullish | Long | Short edge ≥ 2.0× Long edge |
+| Bearish | Short | Long edge ≥ 2.0× Short edge |
 
-This **counter-trend multiplier (1.5×)** ensures the bot only trades against the trend when the edge is significantly better.
+This **counter-trend multiplier (2.0×**, configurable via `MARKET_STRENGTH_COUNTER_TREND_MULTIPLIER`) ensures the bot only trades against the trend when the edge is clearly better, reducing losing counter-trend trades.
 
 ### 2.3 Signal Filters
 
@@ -72,7 +72,9 @@ A signal must pass all these filters to be "allowed":
 | Filter | Criteria | Rationale |
 |--------|----------|-----------|
 | **Uncertainty** | ≤ 8% (crypto) / 5% (equity) | Avoid trades in extremely volatile conditions |
-| **Edge Threshold** | Edge ≥ 10% of Uncertainty | Ensure meaningful expected profit |
+| **Edge Threshold** | Edge ≥ 15% of Uncertainty | Ensure meaningful expected profit; fewer but higher-quality signals |
+| **Min Stop Distance** | Stop ≥ 0.6% of spot from entry | Avoid being stopped out by normal noise |
+| **Min Risk:Reward** | Reward/risk ≥ 1.2 (TP1 vs stop distance) | Only take trades with adequate upside vs risk |
 | **Entry Confirmation** | Momentum alignment in 1m + 5m candles | Confirm price is moving in signal direction |
 | **Valid Levels** | Entry < TP1 (long) or Entry > TP1 (short), Stop valid | Ensure trade geometry is mathematically correct |
 

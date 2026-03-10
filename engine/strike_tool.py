@@ -48,8 +48,10 @@ async def compute_strike_allocations(
 
     for sym in strike_symbols:
         asset = _synth_asset(sym, synth_asset_map)
+        # Synth API supports only 24h horizon for xStocks (equity)
+        horizon = "24h" if sym in _XSTOCK_TO_SYNTH else "1h"
         try:
-            payload = await synth.get_prediction_percentiles(asset=asset, horizon="1h")
+            payload = await synth.get_prediction_percentiles(asset=asset, horizon=horizon)
             pct = synth.parse_percentiles(payload)
         except Exception as e:
             logger.warning("Strike: failed to get percentiles for %s: %s", asset, e)

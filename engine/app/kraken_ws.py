@@ -17,11 +17,13 @@ from .utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# Kraken Spot: BTC, ETH, XAU (spot + OHLC)
+# Kraken Spot: BTC, ETH, XAU, SOL, JITOSOL (spot + OHLC for first three only)
 KRAKEN_TO_SYMBOLS: dict[str, list[str]] = {
     "BTC/USD": ["BTC", "BTC-USD"],
     "ETH/USD": ["ETH", "ETH-USD"],
     "XAU/USD": ["XAU", "XAU-USD"],
+    "SOL/USD": ["SOL", "SOL-USD"],
+    "JITOSOL/USD": ["JITOSOL", "JITOSOL-USD"],
     # xStocks (perpetual futures on Kraken; real-time via Spot WebSocket, ticker only)
     "GOOGLx/USD": ["GOOGLX", "GOOGL"],
     "SPYx/USD": ["SPYX", "SPY"],
@@ -29,9 +31,9 @@ KRAKEN_TO_SYMBOLS: dict[str, list[str]] = {
     "TSLAx/USD": ["TSLAX", "TSLA"],
     "AAPLx/USD": ["AAPLX", "AAPL"],
 }
-# All symbols for ticker (spot + xStocks)
+# All symbols for ticker (spot + xStocks + SOL, JITOSOL)
 KRAKEN_SYMBOLS = list(KRAKEN_TO_SYMBOLS.keys())
-# Only crypto for OHLC (BTC, ETH, XAU) – unchanged
+# Only these for OHLC (BTC, ETH, XAU) – SOL/JITOSOL ticker-only if Kraken doesn’t offer OHLC
 KRAKEN_OHLC_SYMBOLS = ["BTC/USD", "ETH/USD", "XAU/USD"]
 
 

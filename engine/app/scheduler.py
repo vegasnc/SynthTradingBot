@@ -380,9 +380,22 @@ class EngineScheduler:
             return
         candles_1m = mkt.get("candles_1m") or []
         candles_5m = mkt.get("candles_5m") or []
-        if not candles_1m or not candles_5m:
+        spot = float(mkt.get("spot") or 0)
+
+        # Equity (xStocks) often have only ticker/spot from Kraken WS, no OHLC. Use synthetic candles so we can still produce signals from Synth prediction + spot.
+        use_synthetic_candles = cfg.market_type == "equity" and (not candles_1m or not candles_5m)
+        if use_synthetic_candles:
+            if not spot or spot <= 0:
+                return
+            base = {"open": spot, "high": spot, "low": spot, "close": spot, "volume": 0, "vwap": spot}
+            candles_1m = [{**base, "ts": now}] * 3
+            candles_5m = [{**base, "ts": now}] * 2
+        elif not candles_1m or not candles_5m:
             return
-        spot = float(mkt.get("spot") or candles_1m[-1].get("close", 0))
+        else:
+            spot = float(mkt.get("spot") or candles_1m[-1].get("close", 0))
+            if not spot or spot <= 0:
+                return
         self.state.latest_price[symbol] = spot
 
         await self._persist_candles(symbol, candles_1m, candles_5m)
@@ -402,8 +415,10 @@ class EngineScheduler:
             market_direction_override=market_dir,
         )
         entry_ok = confirm_entry(decision.bias, decision.entry, candles_1m[-3:], candles_5m[-2:])
+        if use_synthetic_candles:
+            entry_ok = True
         decision.allowed_to_trade = decision.allowed_to_trade and entry_ok and self.state.trading_enabled
-        if not entry_ok:
+        if not entry_ok and not use_synthetic_candles:
             decision.reasons.append("entry_confirmation_failed")
         signal_doc = {
             "symbol": symbol,
@@ -486,7 +501,9 @@ class EngineScheduler:
                 return latest
 
         asset = synth_asset_for_symbol(symbol, self._synth_asset_map)
-        payload = await self.synth.get_prediction_percentiles(asset=asset, horizon="1h")
+        # Synth API supports only 24h horizon for xStocks (equity); use 1h for crypto
+        horizon = "24h" if cfg.market_type == "equity" else "1h"
+        payload = await self.synth.get_prediction_percentiles(asset=asset, horizon=horizon)
         pct = self.synth.parse_percentiles(payload)
         range_ = pct.p95 - pct.p05
         uncertainty = range_ / spot
@@ -495,7 +512,7 @@ class EngineScheduler:
         doc = {
             "symbol": symbol,
             "market_type": cfg.market_type,
-            "horizon": "1h",
+            "horizon": horizon,
             "timestamp": now,
             "fetched_at": now,
             "spot_at_fetch": spot,

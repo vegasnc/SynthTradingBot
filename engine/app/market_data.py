@@ -25,9 +25,13 @@ KRAKEN_PAIRS = {
     "BTC": "XXBTZUSD",
     "ETH": "XETHZUSD",
     "XAU": "XAUTUSD",
+    "SOL": "SOLUSD",
+    "JITOSOL": "JITOSOLUSD",
     "BTC-USD": "XXBTZUSD",
     "ETH-USD": "XETHZUSD",
     "XAU-USD": "XAUTUSD",
+    "SOL-USD": "SOLUSD",
+    "JITOSOL-USD": "JITOSOLUSD",
 }
 
 

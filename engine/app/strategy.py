@@ -37,6 +37,15 @@ def market_direction_from_momentum(
 # Counter-trend trades need this much higher edge than direction-aligned to override market strength
 COUNTER_TREND_EDGE_MULTIPLIER = 1.5
 
+# Minimum edge as fraction of uncertainty (stricter = fewer but higher-quality signals)
+EDGE_UNCERTAINTY_MIN_FRAC = 0.15
+
+# Minimum stop distance from entry (fraction of spot) to avoid being stopped out by noise
+MIN_STOP_DISTANCE_PCT = 0.006
+
+# Minimum risk:reward (reward/risk) to open a trade
+MIN_RISK_REWARD = 1.2
+
 
 @dataclass(slots=True)
 class Decision:
@@ -76,8 +85,6 @@ def _build_decision_for_bias(
         entry = min(entry, tp1 - 0.002 * spot)
         stop_base = (pct.p05 + pct.p20) / 2
         stop = stop_base - (0.08 * central_range)
-        if entry >= tp1 or stop >= entry:
-            reasons.append("invalid_levels_long")
     else:
         edge = (spot - pct.p50) / spot
         tp1 = (pct.p35 + pct.p50) / 2
@@ -86,13 +93,10 @@ def _build_decision_for_bias(
         entry = max(entry, tp1 + 0.002 * spot)
         stop_base = (pct.p80 + pct.p95) / 2
         stop = stop_base + (0.08 * central_range)
-        if entry <= tp1 or stop <= entry:
-            reasons.append("invalid_levels_short")
-
-    flags["edge_filter_pass"] = abs(edge) >= 0.10 * uncertainty
+    flags["edge_filter_pass"] = abs(edge) >= EDGE_UNCERTAINTY_MIN_FRAC * uncertainty
     if not flags["edge_filter_pass"]:
         reasons.append("edge_below_threshold")
-    allowed = all(flags.values()) and "invalid_levels_long" not in reasons and "invalid_levels_short" not in reasons
+    allowed = all(flags.values())
     tp = (tp1 + tp2) / 2
     return Decision(
         bias=bias,

@@ -1,0 +1,141 @@
+=== Synth Trading Bot – Interview Cheat Sheet ===
+
+Keep this open during the interview. Short, high‑signal notes only.
+
+--------------------------------------------------
+1) Core idea
+--------------------------------------------------
+- Use Synth’s probabilistic forecasts (percentiles) to:
+  - Decide bias (long/short)
+  - Compute edge and uncertainty
+  - Derive entry / stop / TP1 / TP2
+  - Allocate capital across assets (Strike app)
+
+--------------------------------------------------
+2) Key Synth API usage
+--------------------------------------------------
+- Main endpoint: /insights/prediction-percentiles
+  - Inputs: asset (BTC, ETH, XAU, SPY, GOOGL, etc.), horizon (1h)
+  - Output: percentiles p05, p20, p35, p50, p65, p80, p95 (price levels)
+- Others (mainly for risk / Strike):
+  - /insights/liquidation
+  - /insights/lp-bounds
+  - /insights/lp-probabilities
+
+--------------------------------------------------
+3) Edge & uncertainty (per asset)
+--------------------------------------------------
+- Long edge: (p50 − spot) / spot
+- Short edge: (spot − p50) / spot
+- Uncertainty: (p95 − p05) / spot
+- Trade allowed only if:
+  - |edge| ≥ k × uncertainty   (k ≈ 0.10)
+  - uncertainty ≤ threshold (looser for crypto, tighter for equities)
+
+--------------------------------------------------
+4) Levels: entry, stop, TP1, TP2 (intuition)
+--------------------------------------------------
+For LONG:
+- TP1 ≈ mid(p50, p65)
+- TP2 ≈ p65
+- Entry:
+  - Start near p35, adjust so: entry < TP1 and not too close to spot
+- Stop:
+  - Based on p05–p20 “tail” price; ensure stop < entry
+- If entry ≥ TP1 or stop ≥ entry → reason: invalid_levels_long → skip
+
+For SHORT (mirrored):
+- TP1 between p35 and p50; TP2 around p35
+- Entry near p65, enforce entry > TP1
+- Stop above entry using higher percentiles
+- If entry ≤ TP1 or stop ≤ entry → invalid_levels_short → skip
+
+--------------------------------------------------
+5) Partial close logic (TP1 / TP2)
+--------------------------------------------------
+- On open:
+  - qty = Q; original_qty = Q; tp1_closed = false
+- When price hits TP1:
+  - Close 50%: close_qty = 0.5 × original_qty
+  - Remaining qty = original_qty − close_qty
+  - Realized PnL from TP1 added to realized_pnl
+  - Mark tp1_closed = true
+- When price hits TP2 or stop:
+  - Close remaining qty at market
+  - Add final realized PnL
+
+In UI (when TP1 hit and trade still open):
+- Display PnL per trade as:
+  - Profit TP1 + current PnL (remaining 50%) = Total
+
+--------------------------------------------------
+6) Strike app (allocation)
+--------------------------------------------------
+- Inputs: list of strike symbols (BTC, ETH, XAU, GOOGLX, SPYX, NVDAX, TSLAX, AAPLX)
+- For each symbol:
+  - Map trading symbol → Synth asset (e.g. GOOGLX → GOOGL)
+  - Get prediction percentiles
+  - Compute score = function(edge, uncertainty, central range)
+- Convert scores → weights:
+  - Cap max per‑asset weight (max_weight_per_asset)
+  - Cap total crypto exposure (max_total_crypto)
+  - Smooth vs previous snapshot to avoid jumps
+- Shown in UI as “Strike %” next to each asset (plus live price from Kraken WS)
+
+--------------------------------------------------
+7) Risk management (quick)
+--------------------------------------------------
+- Position sizing:
+  - Target risk % of equity per trade:
+    - crypto_risk_pct, equity_risk_pct
+  - Qty chosen so: max loss at stop ≈ risk % × equity
+- Exposure checks:
+  - MAX_SYMBOL_EXPOSURE → per‑symbol cap (e.g. ≤ 20% of equity)
+  - MAX_PORTFOLIO_EXPOSURE → total exposure cap (e.g. ≤ 70% of equity)
+  - If new trade breaks these → reason: "portfolio/symbol exposure limit"
+- Safety flags:
+  - PAPER_TRADING (true/false)
+  - ENABLE_LIVE_TRADING (true/false)
+
+--------------------------------------------------
+8) News ingestion & usage
+--------------------------------------------------
+- Scrape RSS / news feeds → normalize {title, source, snippet, url, ts}
+- Analyze with LLM:
+  - Daily summary
+  - Sticky notes (key points)
+  - Asset bias: bullish / bearish / neutral per symbol
+- Currently:
+  - Used for trader context in dashboard/popup
+  - Future: hook into filters (e.g. avoid opening new trades around very negative news)
+
+--------------------------------------------------
+9) Synth credit management
+--------------------------------------------------
+- Store predictions per symbol in Mongo with next_refresh_at
+- Refresh rules:
+  1) Baseline: every SYNTH_REFRESH_MINUTES (e.g. 10)
+  2) Early refresh: if price moves ≥ SYNTH_PRICE_CHANGE_REFRESH_PCT
+     within SYNTH_PRICE_CHANGE_PERIOD_MINUTES
+- Reuse cached predictions until:
+  - next_refresh_at is reached, or
+  - early‑refresh condition triggers
+- Same forecasts reused by:
+  - Strategy (entries/exits)
+  - Strike app (weights)
+
+--------------------------------------------------
+10) Strong & weak points (sound bites)
+--------------------------------------------------
+Strengths:
+- Fully probabilistic: uses entire forecast distribution, not just a point price
+- Transparent reasons: "uncertainty_too_high", "edge_below_threshold", "invalid_levels_long/short"
+- Clear partial‑profit accounting: Profit TP1 + current = Total
+- Portfolio‑aware via Strike + exposure limits
+- Observable: dashboard shows signals, reasons, PnL breakdown, Synth calls
+
+Weaknesses / next steps:
+- Regime awareness mostly via simple uncertainty thresholds; can add richer volatility regimes
+- News still not tightly coupled to trade decisions
+- More backtesting / walk‑forward analysis would strengthen confidence in live deployment
+
