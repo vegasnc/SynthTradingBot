@@ -585,6 +585,33 @@ class EngineScheduler:
             logger.info("Trade skipped for %s: %s", symbol, reason)
             return reason
 
+        # 4) Cooldown: avoid re-entering the same symbol too frequently
+        cooldown_minutes = max(0, getattr(self.settings, "cooldown_minutes", 15))
+        if cooldown_minutes:
+            now = utc_now()
+            cursor = (
+                self.store.db.positions.find({"symbol": symbol})
+                .sort("opened_at", -1)
+                .limit(1)
+            )
+            last_list = await cursor.to_list(length=1)
+            if last_list:
+                last = last_list[0]
+                opened_at = as_utc(last.get("opened_at")) if last.get("opened_at") else None
+                closed_at = as_utc(last.get("closed_at")) if last.get("closed_at") else None
+                last_ts = opened_at or closed_at
+                if last_ts:
+                    next_allowed = last_ts + timedelta(minutes=cooldown_minutes)
+                    if now < next_allowed:
+                        reason = f"cooldown_active_{cooldown_minutes}m"
+                        logger.info(
+                            "Trade skipped for %s: cooldown active until %s (now=%s)",
+                            symbol,
+                            next_allowed,
+                            now,
+                        )
+                        return reason
+
         open_positions = await self._open_positions_for_symbol(symbol)
         same_side = [p for p in open_positions if p.get("side") == new_side]
         if same_side:
